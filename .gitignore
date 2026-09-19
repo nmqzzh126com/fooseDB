@@ -37,3 +37,18 @@ Desktop.ini
 # Test coverage
 coverage/
 .nyc_output/
+
+# ===== 本地工具二进制（Windows 便携 Redis 等） =====
+# 源码/压缩包本身保留，运行产物与编译产物忽略
+*.exe
+*.pdb
+*.dll
+*.pid
+*.zip
+*.gz
+*.tar
+*.7z
+
+# Windows Redis 运行数据
+tools/redis/dump.rdb
+tools/redis/*.log
