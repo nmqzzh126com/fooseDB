@@ -1,0 +1,22 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"extends": "fastify-tsconfig",
+	"compilerOptions": {
+		// —— 项目结构相关（父 fastify-tsconfig 不提供，必须显式设置）——
+		"outDir": "./dist",
+		"rootDir": "./src",
+
+		// —— 在父级 NodeNext/严格风格基础上，追加两条本项目偏好：——
+		// 1) 强制所有"仅导入类型"的语句写成 import type { X } from "..."，
+		//    避免 verbatimModuleSyntax 关闭时可能遗漏的类型/值边界歧义
+		"verbatimModuleSyntax": true,
+		// 2) 只自动注入 @types/node，其他类型包（如 @types/better-sqlite3）
+		//    通过显式 import 使用，保持类型作用域可控
+		"types": ["node"]
+	},
+	// 只编译 src/ 下的 .ts（app.ts 是 fastify-cli 初始模板的旧入口名，本项目已不存在）
+	//   *.d.ts 同时纳入：放置类型声明合并（如 FastifyRequest.authContext 装饰器）
+	//   scripts/**/*.ts 不走 tsc 编译（tsx 直接执行），VS Code 会用默认 TS 配置检查它们
+	"include": ["src/**/*.ts", "src/**/*.d.ts"],
+	"exclude": ["node_modules", "dist"]
+}

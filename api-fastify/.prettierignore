@@ -1,0 +1,12 @@
+# 不格式化这些目录/文件
+node_modules/
+dist/
+data/
+*.db
+*.db-wal
+*.db-shm
+pnpm-lock.yaml
+pnpm-workspace-state.json
+.env
+.env.*
+logs/

@@ -1,0 +1,20 @@
+# http://editorconfig.org
+# 根级配置 —— 覆盖整个 monorepo，子目录 .editorconfig 可局部覆盖
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# 不缩进文件（.md 保持原样）
+[*.md]
+insert_final_newline = false
+trim_trailing_whitespace = false
+
+# 4 空格缩进的配置文件
+[Makefile]
+indent_style = tab
