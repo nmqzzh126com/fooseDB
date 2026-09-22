@@ -406,15 +406,15 @@ const ROLE_LEVEL: Record<RoleLevel, number> = { public: 0, user: 1, admin: 2 };
  *   - role_required=public → 仅 auth_required 约束（如关闭则匿名也行）
  *   - role_required=user | 需要至少 user 角色/admin → 无论 auth_required 怎样都必须登录，且 admin 比 user 高
  */
-export function authorizeCaller(
+export async function authorizeCaller(
   auth: CustomCaller,
   context: { authRequired: boolean; roleRequired: RoleLevel; objectId: number }
-): JwtPayload | null {
+): Promise<JwtPayload | null> {
   let payload: JwtPayload | null = null;
   let verifyError: Error | null = null;
   if (auth.token) {
     try {
-      payload = verifyToken(auth.token, auth.fingerprint);
+      payload = await verifyToken(auth.token, auth.fingerprint);
     } catch (e) {
       // token 无效当作「没提供」处理（但原始错误保留用于 401）
       verifyError = e as Error;

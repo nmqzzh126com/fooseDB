@@ -55,7 +55,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // GET 列表：管理端读接口，要求 system admin（避免绑定用户看全量项目定义）
   fastify.get("/api/config/objects", async (request, reply) => {
     try {
-      requireSystemAdminForManage({
+      await requireSystemAdminForManage({
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -69,7 +69,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // GET 单条：同样需要 system admin
   fastify.get<{ Params: { id: string } }>("/api/config/objects/:id", async (request, reply) => {
     try {
-      requireSystemAdminForManage({
+      await requireSystemAdminForManage({
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -86,7 +86,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: CreateObjectSchema } },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -107,7 +107,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: UpdateObjectSchema } },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -125,7 +125,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // DELETE：仅 system admin
   fastify.delete<{ Params: { id: string } }>("/api/config/objects/:id", async (request, reply) => {
     try {
-      requireAdminPanel({
+      await requireAdminPanel({
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -141,7 +141,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // POST /api/config/objects/test-connection  { db_type, db_url?, db_path? }
   fastify.post<{ Body: Body }>("/api/config/objects/test-connection", async (request, reply) => {
     try {
-      requireAdminPanel({
+      await requireAdminPanel({
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -214,7 +214,30 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
 
       if (type === "postgres") {
-        return reply.code(501).send({ error: "PostgreSQL 驱动尚未启用，请先 pnpm add pg" });
+        const url = (db_url ?? "").trim();
+        if (!url) return reply.code(400).send({ error: "PostgreSQL 需要填写 db_url" });
+        try {
+          const parsed = new URL(url);
+          if (!parsed.hostname) throw new Error("缺少 host");
+          if (!parsed.pathname || parsed.pathname === "/") throw new Error("缺少 database");
+        } catch (e: any) {
+          return reply.code(400).send({ error: `db_url 格式错误: ${e?.message ?? e}` });
+        }
+        const pg = await import("pg");
+        const pool = new pg.Pool({ connectionString: url });
+        try {
+          const { rows } = await pool.query("SELECT 1 AS ok");
+          const u = new URL(url);
+          return reply.code(200).send({
+            ok: true,
+            message: `PostgreSQL 连接成功: ${u.hostname}:${u.port || 5432}${u.pathname}`,
+            probe: rows
+          });
+        } catch (e: any) {
+          return reply.code(400).send({ error: `PostgreSQL 连接失败: ${e?.message ?? e}` });
+        } finally {
+          try { await pool.end(); } catch { /* ignore */ }
+        }
       }
 
       return reply.code(400).send({ error: `未知 db_type: ${db_type}` });
@@ -248,7 +271,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     },
     async (request, reply) => {
       try {
-        requireSystemAdminForManage({
+        await requireSystemAdminForManage({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -272,7 +295,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: CreateTableRuleSchema } },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -293,7 +316,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: UpdateTableRuleSchema } },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -313,7 +336,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/config/tables/:ruleId",
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -351,7 +374,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });

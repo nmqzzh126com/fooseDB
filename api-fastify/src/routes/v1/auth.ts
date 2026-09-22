@@ -28,6 +28,7 @@ import { LoginBodySchema, RefreshBodySchema, LogoutBodySchema } from "../../sche
 import { BusinessError } from "../../utils/errors.js";
 import { ratelimitCheck } from "../../plugins/ratelimit.js";
 import { getDb } from "../../db.js";
+import { getDs } from "../../datasources/registry.js";
 import { attachRoles, type RoleBrief } from "../../services/users.service.js";
 
 /** 解析正整数环境变量；缺省/非法（0、负数、小数、非数字）时回退 fallback */
@@ -75,45 +76,78 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
         return reply.send({ data: result });
       } catch (e) {
         if (e instanceof BusinessError) return reply.code(e.statusCode).send({ error: e.message });
-        throw e;
+        console.error("[login] UNEXPECTED ERROR:", e);
+        return reply.code(500).send({ error: "INTERNAL", message: (e as Error).message, stack: (e as Error).stack });
       }
     }
   );
 
   // ==========================================================================
-  // GET /api/auth/me：验证 Bearer token + 指纹，并返回用户信息（含扩展字段）
+  // GET /api/auth/me：验证 Bearer token + 指纹，并返回用户信息（含扩展字段 + roles）
+  //   分流逻辑：
+  //     - payload.scope === "admin-panel" → 走 app.db 的 users + role_user + roles
+  //     - payload.ds 存在（如 "sqlite_demo"）→ 走 getDs(ds) 的 foose_users + foose_role_user + foose_roles
+  //   后端 roles 统一返回 RoleBrief[] 对象数组，前端自行转 string[]
   // ==========================================================================
   fastify.get("/api/auth/me", async function (request, reply) {
     try {
       const token = request.authContext.bearerToken;
       if (!token) throw new BusinessError(401, "missing bearer token | 缺少 Bearer token");
       const fp = request.authContext.fingerprint;
-      const payload = verifyToken(token, fp);
+      const payload = await verifyToken(token, fp);
 
-      // 重查 users 表拿最新的扩展字段（JWT payload 不存，保持 lean）
+      const isAdminPanel = payload.scope === "admin-panel";
+      const dsName: string | undefined = (payload as any).ds;
+
       let extRow:
         | {
-          id: number;
-          extended: string | null;
-          avatar: string | null;
-          permissions: string | null;
-          email: string | null;
-          phone: string | null;
-        }
+            id: number;
+            extended: string | null;
+            avatar: string | null;
+            permissions: string | null;
+            email: string | null;
+            phone: string | null;
+          }
         | undefined;
-      try {
-        extRow = getDb()
-          .prepare(
-            "SELECT id, extended, avatar, permissions, email, phone FROM users WHERE id = ? LIMIT 1"
-          )
-          .get(payload.sub) as any;
-      } catch {
-        extRow = undefined;
-      }
+      let roles: RoleBrief[] = [];
 
-      // attachRoles 从 role_user + roles JOIN 拿 RoleBrief[]
-      const rows = extRow ? attachRoles([extRow]) : [];
-      const roles: RoleBrief[] = rows.length > 0 ? rows[0].roles : [];
+      if (isAdminPanel) {
+        // —— admin-panel 路径：查 app.db ——
+        try {
+          extRow = getDb()
+            .prepare(
+              "SELECT id, extended, avatar, permissions, email, phone FROM users WHERE id = ? LIMIT 1"
+            )
+            .get(payload.sub) as any;
+        } catch {
+          extRow = undefined;
+        }
+        if (extRow) {
+          const [withRoles] = await attachRoles([extRow]);
+          roles = withRoles.roles;
+        }
+      } else if (dsName) {
+        // —— 业务用户路径：查 getDs(dsName).foose_users + foose_role_user + foose_roles ——
+        const db = getDs(dsName);
+        const table = process.env.USER_TABLE ?? "foose_users";
+        try {
+          const rows = await db.query(
+            `SELECT id, extended, avatar, permissions, email, phone FROM "${table}" WHERE id = ? LIMIT 1`,
+            [payload.sub]
+          );
+          extRow = rows[0] as any; // query 返回数组，取第一条
+        } catch {
+          extRow = undefined;
+        }
+        if (extRow) {
+          const [withRoles] = await attachRoles([extRow as any], {
+            dsName,
+            userRoleTable: "foose_role_user",
+            roleTable: "foose_roles"
+          });
+          roles = withRoles.roles;
+        }
+      }
 
       return {
         data: {
@@ -172,7 +206,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
         let errMsg: string | undefined;
         if (tok) {
           try {
-            const payload = verifyToken(tok, request.authContext.fingerprint);
+            const payload = await verifyToken(tok, request.authContext.fingerprint);
             uid = payload.sub;
           } catch (e) {
             // token 过期/失效时仍允许「前端按 logout 尝试撤销」，不要把前端卡在"token 过期导致没法登出"

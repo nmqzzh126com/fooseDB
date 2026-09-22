@@ -1,6 +1,6 @@
 # pure-admin-fastify
 
-> 一个**零代码**的通用 CRUD 接口引擎 + 可视化配置管理后台 + 前端 SDK 测试示例。后端本身不硬编码任何业务表，所有数据源、连接串、表级权限都通过管理后台动态配置，运行时从 SQLite 配置库读取。目前已适配 SQLite、MySQL、PostgreSQL 数据源,其他数据库驱动正在开发中,敬请期待......
+> 一个**零代码**的通用 CRUD 接口引擎 + 可视化配置管理后台 + 前端 SDK 测试示例。后端本身不硬编码任何业务表，所有数据源、连接串、表级权限都通过管理后台动态配置，运行时从 SQLite 配置库读取。目前已适配 SQLite、MySQL、PostgreSQL 数据源,其他数据库驱动正在开发中,敬请期待(最近更新2026-09-22)......
 
 ## ✨ 特性
 
@@ -110,17 +110,17 @@ pure-admin-fastify/                    (Monorepo 根目录)
 
 ## 🛠️ 技术栈
 
-| 组件 | 技术 |
-|------|------|
-| 后端运行时 | Node.js（TypeScript，tsx watch 开发） |
-| HTTP 框架 | Fastify |
-| 配置库 | better-sqlite3（SQLite） |
-| 业务库 | mysql2 / pg |
-| 缓存 | ioredis（未启用自动降级为 Stub） |
-| 认证 | JWT（jsonwebtoken）+ bcrypt |
-| 校验 | Zod |
+| 组件                   | 技术                                             |
+| ---------------------- | ------------------------------------------------ |
+| 后端运行时             | Node.js（TypeScript，tsx watch 开发）            |
+| HTTP 框架              | Fastify                                          |
+| 配置库                 | better-sqlite3（SQLite）                         |
+| 业务库                 | mysql2 / pg                                      |
+| 缓存                   | ioredis（未启用自动降级为 Stub）                 |
+| 认证                   | JWT（jsonwebtoken）+ bcrypt                      |
+| 校验                   | Zod                                              |
 | 前端（admin / client） | Vue 3 + Vite + TypeScript + Element Plus + Pinia |
-| 包管理 | pnpm |
+| 包管理                 | pnpm                                             |
 
 ## 🚀 快速开始
 
@@ -151,6 +151,7 @@ pnpm dev
 ```
 
 首次启动会自动：
+
 - 创建 `data/app.db`（SQLite，WAL journal mode）
 - 建表 + 种子数据（内置 sqlite_app 项目 + demo 业务库示例）
 - 注册所有 object 表中配置的数据源
@@ -167,6 +168,7 @@ pnpm dev
 开发模式下 `vite.config.ts` 会**自动读取 api-fastify/.env 的 ADMIN_PATH**，并 proxy `/api` 和 `/uploads` 到 `http://localhost:8858`。
 
 默认登录账号（在 api-fastify/.env 配置）：
+
 ```
 用户名: admin
 密码: admin123456
@@ -184,11 +186,11 @@ client 通过 `VITE_FOOSE_DB_BASE_URL` 直连后端，不走 Vite proxy。
 
 ### 三端端口总览
 
-| 服务 | 默认端口 | 说明 |
-|------|----------|------|
-| api-fastify | 8858 | 后端 HTTP |
-| admin-vue | 8848 | Vite proxy → 8858 |
-| client | 8849 | VITE_FOOSE_DB_BASE_URL → 8858 |
+| 服务        | 默认端口 | 说明                          |
+| ----------- | -------- | ----------------------------- |
+| api-fastify | 8858     | 后端 HTTP                     |
+| admin-vue   | 8848     | Vite proxy → 8858             |
+| client      | 8849     | VITE_FOOSE_DB_BASE_URL → 8858 |
 
 ## 📖 使用流程
 
@@ -204,29 +206,29 @@ client 通过 `VITE_FOOSE_DB_BASE_URL` 直连后端，不走 Vite proxy。
 
 ## 🔐 安全机制
 
-| 机制 | 说明 |
-|------|------|
-| 密码 | bcrypt 哈希（cost=10，支持 4~31 可调），改密/重置自动生效 |
-| Token | accessToken（2h）+ refreshToken（7d），refresh 自动轮换 |
-| 盗用检测 | 同一 refresh family 重复使用 → 整 family 作废 |
-| 客户端指纹 | JWT 绑定 X-Client-Id（canvas 指纹），换设备必须重登 |
-| 代次强制注销 | 改密后 token_version 自增，旧 token 立即失效 |
-| 登录限流 | IP 维度，默认 30 次 / 60s（Redis 启用时生效） |
-| 配置表保护 | object / object_table / users / roles 等禁止通过通用 API 访问 |
-| CORS 防护 | 动态读取 object.cors_origins，未配置默认兜底 `"*"` |
-| SQL 注入 | filter 白名单语法 + 自定义 SQL 参数化 + 行数封顶 + 超时 |
+| 机制         | 说明                                                          |
+| ------------ | ------------------------------------------------------------- |
+| 密码         | bcrypt 哈希（cost=10，支持 4~31 可调），改密/重置自动生效     |
+| Token        | accessToken（2h）+ refreshToken（7d），refresh 自动轮换       |
+| 盗用检测     | 同一 refresh family 重复使用 → 整 family 作废                 |
+| 客户端指纹   | JWT 绑定 X-Client-Id（canvas 指纹），换设备必须重登           |
+| 代次强制注销 | 改密后 token_version 自增，旧 token 立即失效                  |
+| 登录限流     | IP 维度，默认 30 次 / 60s（Redis 启用时生效）                 |
+| 配置表保护   | object / object_table / users / roles 等禁止通过通用 API 访问 |
+| CORS 防护    | 动态读取 object.cors_origins，未配置默认兜底 `"*"`            |
+| SQL 注入     | filter 白名单语法 + 自定义 SQL 参数化 + 行数封顶 + 超时       |
 
 ## 📁 配置库核心表
 
-| 表名 | 作用 |
-|------|------|
-| `object` | 项目定义：name / db_type / db_url / db_path / cors_origins / auth_required / enabled |
-| `object_table` | 表级权限：object_id → table_name + allow_select/insert/update/delete + batch_* |
-| `users` | 管理端用户（object_id=-1 管理员，>=1 绑定项目） |
-| `roles` + `role_user` | 角色多对多绑定 |
-| `query_template` | 自定义 SQL 模板（SELECT-only、参数化、行数封顶、超时） |
-| `custom_query_log` | 自定义 SQL 执行审计 |
-| `refresh_tokens` | refresh token 代次轮换 + 盗用检测 |
+| 表名                  | 作用                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `object`              | 项目定义：name / db_type / db_url / db_path / cors_origins / auth_required / enabled |
+| `object_table`        | 表级权限：object*id → table_name + allow_select/insert/update/delete + batch*\*      |
+| `users`               | 管理端用户（object_id=-1 管理员，>=1 绑定项目）                                      |
+| `roles` + `role_user` | 角色多对多绑定                                                                       |
+| `query_template`      | 自定义 SQL 模板（SELECT-only、参数化、行数封顶、超时）                               |
+| `custom_query_log`    | 自定义 SQL 执行审计                                                                  |
+| `refresh_tokens`      | refresh token 代次轮换 + 盗用检测                                                    |
 
 ## 🧪 测试
 
@@ -261,18 +263,18 @@ cd client     && pnpm build
 
 ### 环境变量速查（api-fastify/.env）
 
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `PORT` | 8858 | HTTP 端口 |
-| `HOST` | 0.0.0.0 | 监听地址 |
-| `ADMIN_PATH` | /admin | 管理后台入口路径 |
-| `ADMIN_USERNAME` | admin | 管理员账号 |
-| `ADMIN_PASSWORD` | admin123456 | 管理员密码（明文或 bcrypt `$2` 开头） |
-| `JWT_SECRET` | dev-secret-... | JWT 签名密钥（**生产必须更换**） |
-| `ACCESS_TOKEN_TTL_SEC` | 7200 | Access token 有效期（秒） |
-| `REFRESH_TOKEN_TTL_SEC` | 604800 | Refresh token 有效期（秒） |
-| `REDIS_CACHE_DEFAULT__ENABLED` | false | Redis 开关 |
-| `REDIS_CACHE_DEFAULT__URL` | redis://127.0.0.1:6379 | Redis 地址 |
+| 变量                           | 默认                   | 说明                                  |
+| ------------------------------ | ---------------------- | ------------------------------------- |
+| `PORT`                         | 8858                   | HTTP 端口                             |
+| `HOST`                         | 0.0.0.0                | 监听地址                              |
+| `ADMIN_PATH`                   | /admin                 | 管理后台入口路径                      |
+| `ADMIN_USERNAME`               | admin                  | 管理员账号                            |
+| `ADMIN_PASSWORD`               | admin123456            | 管理员密码（明文或 bcrypt `$2` 开头） |
+| `JWT_SECRET`                   | dev-secret-...         | JWT 签名密钥（**生产必须更换**）      |
+| `ACCESS_TOKEN_TTL_SEC`         | 7200                   | Access token 有效期（秒）             |
+| `REFRESH_TOKEN_TTL_SEC`        | 604800                 | Refresh token 有效期（秒）            |
+| `REDIS_CACHE_DEFAULT__ENABLED` | false                  | Redis 开关                            |
+| `REDIS_CACHE_DEFAULT__URL`     | redis://127.0.0.1:6379 | Redis 地址                            |
 
 ## 📜 License
 

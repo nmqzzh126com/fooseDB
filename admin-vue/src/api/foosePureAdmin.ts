@@ -50,7 +50,7 @@ export const dbConnectionList: DbConnection[] = [
     label: "PostgreSQL",
     value: "postgres",
     example: "postgres://user:pass@host:5432/dbname",
-    disabled: true,
+    disabled: false,
   },
   {
     label: "MongoDB",
@@ -121,8 +121,9 @@ export function createFastifyClient(): AxiosInstance {
       if (body && typeof body === "object" && !Array.isArray(body)) {
         // ok 在根上的 → admin/config/* / admin/db/* 写操作，保留完整
         if ("ok" in body) return body;
-        // 后端包装 {data: ...} 且只有 data 一个根字段 → 解包拿内层
-        if ("data" in body && Object.keys(body).length === 1) return body.data;
+        // 后端协议信封：{data: {...}} 且 data 是对象 → 解包
+        // 注意：debug 插件可能注入 durationMs 等额外字段，不能用 Object.keys().length===1
+        if ("data" in body && body.data !== null && typeof body.data === "object" && !Array.isArray(body.data)) return body.data;
         // 其他情况（generic CRUD 直接返回纯对象/列表）→ 原样透传
       }
       return body;
@@ -359,6 +360,7 @@ export interface ObjectDef {
   cors_methods: string;
   custom_sql_enabled?: 0 | 1; // 是否允许 /api/custom/*
   enabled: 0 | 1; // 项目启用/禁用（0=禁用，拒绝所有请求）
+  debug: 0 | 1; // 0=关闭调试日志；1=开启（接口请求/响应写入 Redis，最近 1000 条）
   created_at?: number;
   _user_count?: number;// 项目下用户数--虚拟字段
   _table_count?: number;// 项目下表数--虚拟字段
@@ -967,7 +969,64 @@ export function runCustomSql(name: string, params?: Record<string, unknown>) {
 }
 
 /* ================================================================
- * 7. /api/system/* — 运维接口
+ * 9. /api/admin/debug-logs/* —— 接口调试日志（debug=1 的项目）
+ * ================================================================ */
+
+export interface DebugLogEntry {
+  timestamp: number;
+  method: string;
+  url: string;
+  path: string;
+  object: string | null;
+  table: string | null;
+  statusCode: number;
+  durationMs: number;
+  ip: string;
+  request: {
+    headers: Record<string, string>;
+    query?: Record<string, string>;
+    params?: Record<string, string>;
+    body?: unknown;
+  };
+  response?: unknown;
+  error?: string;
+}
+
+export interface DebugLogListResult {
+  ok: true;
+  items: DebugLogEntry[];
+  total: number;
+  warning?: string;
+}
+
+export interface DebugLogObjectResult {
+  ok: true;
+  objects: Array<{ name: string; count: number }>;
+  warning?: string;
+}
+
+/** GET /api/admin/debug-logs?object=xxx&limit=N — 获取某项目的 debug 日志 */
+export function listDebugLogs(object: string, limit = 100) {
+  return fastify.get<any, DebugLogListResult>("/admin/debug-logs", {
+    params: { object, limit }
+  });
+}
+
+/** GET /api/admin/debug-logs/objects — 列出所有 debug=1 的项目及日志条数 */
+export function listDebugLogObjects() {
+  return fastify.get<any, DebugLogObjectResult>("/admin/debug-logs/objects");
+}
+
+/** POST /api/admin/debug-logs/clear — 清空指定项目的 debug 日志 */
+export function clearDebugLogs(object: string) {
+  return fastify.post<any, { ok: true; removed: number; object: string }>(
+    "/admin/debug-logs/clear",
+    { object }
+  );
+}
+
+/* ================================================================
+ * 10. /api/system/* — 运维接口
  * ================================================================ */
 
 /**

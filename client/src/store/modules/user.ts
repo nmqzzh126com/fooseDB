@@ -12,7 +12,7 @@ import {
   type RefreshTokenResult,
   getLogin,
   refreshTokenApi
-} from "@/api/foose_db_user";
+} from "@/api/foose_db";
 import { useMultiTagsStoreHook } from "./multiTags";
 import { type DataInfo, setToken, removeToken, userKey } from "@/utils/auth";
 
@@ -80,6 +80,7 @@ export const useUserStore = defineStore("pure-user", {
       return new Promise<UserResult>((resolve, reject) => {
         getLogin(data)
           .then(data => {
+            console.log("用户登录成功:", data);
             if (data.code === 0) {
               setToken(data.data);
               resolve(data);

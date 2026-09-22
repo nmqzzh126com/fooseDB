@@ -1,25 +1,62 @@
 /**
  * 认证 Service：登录验证 + JWT token 生成 + 密码哈希 + refresh_token 轮换。
  *
+ * 🔐 双数据源认证架构（2025-09-21 重构）：
+ * ──────────────────────────────────────────────────────────────────────
+ *
+ *   admin-panel 分支（.env ADMIN_USERNAME）：
+ *     ── 查 app.db.users → 签发 JWT（scope="admin-panel", ds=undefined）
+ *     ── object_id=-1，所有项目放行
+ *
+ *   业务用户分支（USER_DS_NAME/USER_TABLE，默认 sqlite_demo/foose_users）：
+ *     ── 查 {USER_DS_NAME} 数据源的 {USER_TABLE} 表
+ *     ── object_id 不在用户表里，从 app.db.object 按 USER_DS_NAME 反查
+ *     ── JWT.payload 新增 ds=USER_DS_NAME 字段，verifyToken 查 TV 时按 ds 选数据源
+ *     ── flag=0 检查仍在用户表做（跨表避免）
+ *
+ *   用户表 schema 要求（业务用户表）：
+ *     必须有：id, username, password, token_version, flag
+ *     可选：  nickname, extended, avatar, permissions, email, phone
+ *     不要求：object_id（从 object 配置反查）
+ *
+ *   JWT payload 结构：
+ *     { sub, username, nickname, object_id, tv, fp, jti, ds?, scope?, iat, exp, type }
+ *                              ↑            ↑
+ *                              ├─ 固定：app.db.object.id 反查   ├─ admin-panel 时 undefined
+ *
+ *   TV_CACHE 隔离策略：
+ *     Map 结构：Map<`${ds}:${uid}`, { tv, object_id, flag, expireAt }>
+ *     admin-panel ds=undefined → key 为 uid 字符串
+ *     业务用户 ds="sqlite_demo" → key 为 "sqlite_demo:1"
+ *     彻底隔离不同数据源的同 id 用户（admin.id=1 和 demo.id=1 不会互相污染缓存）
+ *
+ *   环境变量（可覆盖默认值）：
+ *     USER_DS_NAME   默认 "sqlite_demo" — 业务用户登录的数据源名
+ *     USER_TABLE     默认 "foose_users" — 业务用户登录的表名
+ *     TOKEN_VERSION_CACHE_TTL_SEC 默认 10 — TV 内存缓存 TTL
+ *
+ *   切换到另一个数据库（如 MySQL）：
+ *     USER_DS_NAME=mysql_orders USER_TABLE=users pnpm run dev
+ *     （mysql_orders 必须先在 app.db.object 注册且数据源可用）
+ *
  * 安全措施（与 routes/v1/auth.ts 配合）：
  *   P0  bcrypt cost=10 哈希存储 + 时序安全比较；启动时明文密码自动迁移
  *   P1  登录限流（IP 维度，Redis cache_default 固定窗口，Stub 时放行）
  *   P2  客户端指纹绑定：JWT payload.fp = SHA256(X-Client-Id||UA)，verifyToken 时序比对
- *   P3  token_version 代次（users 表）：改密/踢人只需要 +1，verifyToken 比 payload.tv
- *        即可让旧 access_token 立即失效，不依赖 Redis 黑名单（性能更好、也可横向扩展）。
+ *   P3  token_version 代次：改密/踢人只需要 +1，verifyToken 比 payload.tv 即可让旧 access_token
+ *       立即失效，不依赖 Redis 黑名单（性能更好、也可横向扩展）。
+ *       TV_CACHE 进程内 LRU，TTL = TOKEN_VERSION_CACHE_TTL_SEC（默认 10s）。
  *   P4  refresh_token 轮换 + reuse detection：POST /api/auth/refresh 接受 refresh_jwt，
- *        按 family_id 作废前一代；同一个旧 refresh 被二次使用（reuse）→ 整 family 失效
- *        强制重登（防 token 被复制时的持续滥用）。
+ *       按 family_id 作废前一代；同一个旧 refresh 被二次使用（reuse）→ 整 family 失效
+ *       强制重登（防 token 被复制时的持续滥用）。
  *   P5  refresh 绑定 fingerprint：刷新端指纹必须与签发端一致（换 UA/设备 → 直接 401，
- *        即便 refresh 泄露到别的设备也没法续）。
+ *       即便 refresh 泄露到别的设备也没法续）。
  *
- * 性能优化（本轮按你的要求实现 2 和 3，额外实现了 1）：
- *   1. token_version LRU：进程内 Map，TTL = TV_CACHE_TTL（默认 10s）。首次命中查一次 DB，
- *      后续 10s 内直接读内存，避免每个 verifyToken 都打 SQLite。多实例部署场景下，最坏
- *      改密后最多 10s 旧 token 仍有效；可按需调 .env TOKEN_VERSION_CACHE_TTL_SEC 缩小。
- *   2. fingerprint 请求级缓存：请求层 plugins/auth-context.ts 已将 fingerprint 和 bearer
- *      token 预挂到 request.authContext，service 层优先读预计算值，避免同一请求内
- *      重复 SHA256 指纹计算。
+ * 性能优化：
+ *   1. token_version LRU：进程内 Map，TTL 默认 10s。首次命中查一次 DB，后续 10s 内直接读内存，
+ *      避免每个 verifyToken 都打 SQLite。多实例部署场景下最坏改密后最多 10s 旧 token 仍有效。
+ *   2. fingerprint 请求级缓存：请求层 plugins/auth-context.ts 已将 fingerprint 和 bearer token
+ *      预挂到 request.authContext，service 层优先读预计算值，避免同一请求内重复 SHA256 指纹计算。
  *   3. verifyToken 单签名：JWT 验签是一次 HMAC-SHA256（~0.01ms），已经极轻。
  */
 
@@ -30,6 +67,12 @@ import { getDs } from "../datasources/registry.js";
 import { getDb, BCRYPT_COST } from "../db.js";
 import { BusinessError } from "../utils/errors.js";
 import { attachRoles, type RoleBrief } from "./users.service.js";
+import { getObjectByName } from "./config.service.js";
+
+/** 业务用户登录使用的数据源（从 .env 读，默认 sqlite_demo） */
+const USER_DS_NAME = process.env.USER_DS_NAME ?? "sqlite_demo";
+/** 业务用户登录查询的表名（从 .env 读，默认 foose_users） */
+const USER_TABLE = process.env.USER_TABLE ?? "foose_users";
 
 /**
  * 解析 .env 中的 TTL（秒）。非法/缺省/非正整数时回退默认值，绝不抛错。
@@ -102,7 +145,7 @@ function pruneLoginCheckCache(now: number): void {
  * 命中但 expireAt 过期 → 仍视为 miss，重新查 DB。
  * 为什么用自写 Map 不 LRU：users 量通常 < 10 万，expire 懒清理足够，无性能问题。
  */
-const TV_CACHE = new Map<number, { tv: number; object_id: number; flag: number; expireAt: number }>();
+const TV_CACHE = new Map<string, { tv: number; object_id: number; flag: number; expireAt: number }>();
 const TV_CACHE_TTL_SEC = Number(process.env.TOKEN_VERSION_CACHE_TTL_SEC ?? 10) || 10;
 
 /** tv 懒清理：避免长时间运行 Map 只增不减（容量=活跃用户数即可） */
@@ -237,6 +280,9 @@ export interface JwtPayload {
   jti: string;
   /** 用户绑定的 object（项目）id；-1 系统管理员，>=1 仅能访问指定 object 项目的白名单表 */
   object_id: number;
+  /** 业务用户 token 附带的数据源名（如 "sqlite_demo"），verifyToken 查用户 TV 时用。
+   *  admin-panel scope 的 token 不写此字段（默认查 sqlite_app）。 */
+  ds?: string;
   /** 管理端面板专属 scope：仅当 .env ADMIN_USERNAME/ADMIN_PASSWORD 登录时签发 "admin-panel"。
    *  有此 scope 的 token 可以访问 /api/admin/db/* 和所有管理接口；
    *  普通业务用户（users 表登录）的 token 没有 scope 字段 */
@@ -285,19 +331,62 @@ interface UserAuthState {
   object_id: number;
   flag: number;
 }
-export function getUserAuthState(uid: number): UserAuthState | null {
+/**
+ * 异步获取用户认证状态（token_version / object_id / flag）。
+ * verifyToken 每个请求调一次。ds 参数决定查哪个数据源的哪张表：
+ *   - ds=undefined 或 "sqlite_app" → 查 app.db.users（admin-panel 分支）
+ *   - 其他（如 "sqlite_demo"）     → 查 getDs(ds) 的 USER_TABLE 表
+ *                                     object_id 不在业务用户表时从 object 配置反查
+ *
+ * TV_CACHE key 为 `${ds}:${uid}` 字符串，不同数据源的同 id 用户互不干扰。
+ */
+export async function getUserAuthState(uid: number, ds?: string): Promise<UserAuthState | null> {
   const now = Date.now();
   pruneTvCacheIfNeeded(now);
-  const hit = TV_CACHE.get(uid);
+  // cache key 包含 ds，避免不同数据源同 id 用户相互污染
+  const cacheKey = ds ? `${ds}:${uid}` : String(uid);
+  const hit = TV_CACHE.get(cacheKey);
   if (hit && hit.expireAt > now) {
     return { tv: hit.tv, object_id: hit.object_id ?? -1, flag: hit.flag ?? 0 };
   }
   try {
-    const row = getDb()
-      .prepare("SELECT token_version AS tv, object_id, flag FROM users WHERE id = ?")
-      .get(uid) as UserAuthState | undefined;
+    let row: UserAuthState | undefined;
+    if (ds && ds !== "sqlite_app") {
+      // 业务用户：从指定数据源的 USER_TABLE 查
+      const table = USER_TABLE;
+      const db = getDs(ds);
+      try {
+        const rows = await db.query<UserAuthState>(
+          `SELECT token_version AS tv, flag FROM ${table} WHERE id = ?`,
+          [uid]
+        );
+        row = rows[0];
+        // object_id 不存用户表，从 object 配置反查
+        if (row) {
+          const obj = getObjectByName(ds);
+          if (obj) {
+            row = { tv: row.tv, object_id: obj.id, flag: row.flag };
+          }
+        }
+      } catch {
+        // 回退：旧表可能没有 token_version 列
+        const rows = await db.query<{ flag: number }>(
+          `SELECT flag FROM ${table} WHERE id = ?`,
+          [uid]
+        );
+        if (rows[0]) {
+          const obj = getObjectByName(ds);
+          row = { tv: 1, object_id: obj?.id ?? 0, flag: rows[0].flag };
+        }
+      }
+    } else {
+      // admin-panel 或旧模式：查 app.db.users
+      row = getDb()
+        .prepare("SELECT token_version AS tv, object_id, flag FROM users WHERE id = ?")
+        .get(uid) as UserAuthState | undefined;
+    }
     if (!row) return null;
-    TV_CACHE.set(uid, {
+    TV_CACHE.set(cacheKey, {
       tv: row.tv,
       object_id: row.object_id,
       flag: row.flag,
@@ -305,7 +394,6 @@ export function getUserAuthState(uid: number): UserAuthState | null {
     });
     return row;
   } catch {
-    // app.db 尚未初始化或查询失败：保守 miss，不缓存，下次重试
     return null;
   }
 }
@@ -316,7 +404,7 @@ export function getUserAuthState(uid: number): UserAuthState | null {
  */
 export function bumpUserTokenVersion(uid: number): number {
   getDb().prepare("UPDATE users SET token_version = token_version + 1 WHERE id = ?").run(uid);
-  TV_CACHE.delete(uid);
+  TV_CACHE.delete(String(uid));
   const row = getDb().prepare("SELECT token_version AS tv FROM users WHERE id = ?").get(uid) as
     { tv: number } | undefined;
   return row?.tv ?? 1;
@@ -332,7 +420,7 @@ export function bumpUserTokenVersion(uid: number): number {
  * @param fingerprintAlreadyComputed 传入请求层预计算的指纹（authContext.fingerprint），
  *                                   避免二次 sha256；未传仍可通过 headers + tokenPayload 回退计算。
  */
-export function verifyToken(token: string, fingerprintAlreadyComputed: string): JwtPayload {
+export async function verifyToken(token: string, fingerprintAlreadyComputed: string): Promise<JwtPayload> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new BusinessError(401, "invalid token format | token 格式错误");
   const [header, body, sig] = parts;
@@ -359,7 +447,7 @@ export function verifyToken(token: string, fingerprintAlreadyComputed: string): 
   }
   // token_version 代次检查（进程内短时缓存）
   // admin-panel scope 的 token 也走 users 表 tv（因为 sub 是 admin 用户的真实 id）
-  const state = getUserAuthState(payload.sub);
+  const state = await getUserAuthState(payload.sub, payload.ds);
   if (state == null) {
     throw new BusinessError(401, "token subject invalid | token 用户无效");
   }
@@ -420,8 +508,13 @@ interface UserRowInternal {
   nickname: string | null;
   password: string;
   token_version: number;
-  /** 用户绑定的项目：-1=系统管理员，>=1=object.id 绑定一个项目，0=未配置项目（密码正确也拒登，403） */
-  object_id: number;
+  /**
+   * 用户绑定的项目 ID。
+   *   - 当 users 表含 object_id 列时直接读出（旧模式：app.db.users）
+   *   - 当 users 表不含 object_id 列时为 undefined（新模式：foose_users），
+   *     登录链路会从 USER_DS_NAME 反查 app.db.object 表拿 object_id
+   */
+  object_id?: number;
   /** flag 业务标记位：0=正常可登录，非 0 = 禁止登录（具体语义由业务定义） */
   flag: number;
   /** 扩展字段（JSON TEXT，存储任意自定义用户数据） */
@@ -519,7 +612,7 @@ export async function login(
     // adminRow 此处必不为 undefined（上面 if 已兜底赋值）
     const row = adminRow;
     // attachRoles 会挂 RoleBrief[] 虚拟字段
-    const withRoles = attachRoles([row as { id: number } & typeof row])[0];
+    const withRoles = (await attachRoles([row as { id: number } & typeof row]))[0];
     return signLoginResult({
       sub: row.id,
       username: ADMIN_USERNAME,
@@ -537,12 +630,24 @@ export async function login(
     });
   }
 
-  // —— 分支 2：users 表业务用户 ——
-  const db = getDs("sqlite_app");
-  const rows = await db.query<UserRowInternal>(
-    "SELECT id, username, nickname, password, token_version, object_id, flag, extended, avatar, permissions, email, phone FROM users WHERE username = ? LIMIT 1",
-    [username]
-  );
+  // —— 分支 2：业务用户登录 ——
+  //   数据源和表名从 .env USER_DS_NAME / USER_TABLE 读（默认 sqlite_demo / foose_users），
+  //   不再硬编码 app.db.users。object_id 从 app.db.object 表反查。
+  const db = getDs(USER_DS_NAME);
+  // 先尝试带 object_id 列的查询（兼容旧模式：app.db.users），
+  // 失败再 fallback 到不带 object_id 的查询（新模式：foose_users）
+  let rows: UserRowInternal[];
+  try {
+    rows = await db.query<UserRowInternal>(
+      `SELECT id, username, nickname, password, token_version, object_id, flag, extended, avatar, permissions, email, phone FROM ${USER_TABLE} WHERE username = ? LIMIT 1`,
+      [username]
+    );
+  } catch {
+    rows = await db.query<UserRowInternal>(
+      `SELECT id, username, nickname, password, token_version, flag, extended, avatar, permissions, email, phone FROM ${USER_TABLE} WHERE username = ? LIMIT 1`,
+      [username]
+    );
+  }
   if (rows.length === 0) {
     throw new BusinessError(401, "用户名或密码错误");
   }
@@ -574,29 +679,56 @@ export async function login(
     }
   }
 
-  // —— object_id <= 0（未配置项目 / 封禁）或 flag != 0（业务禁用）→ 403 ——
-  // 必须在密码校验之后，防账号枚举
-  if (user.object_id <= 0) {
-    throw new BusinessError(403, "用户未分配项目或账号已被禁用，请联系管理员");
+  // —— object_id 解析 ——
+  //   优先用用户表自带的 object_id（旧模式）；
+  //   没有则从 USER_DS_NAME 反查 app.db.object 表（新模式：foose_users 没有 object_id）。
+  let resolvedObjectId = user.object_id;
+  if (!resolvedObjectId) {
+    const obj = getObjectByName(USER_DS_NAME);
+    if (!obj) {
+      throw new BusinessError(
+        500,
+        `登录错误：object "${USER_DS_NAME}" 未在配置库中注册`
+      );
+    }
+    if (obj.enabled !== 1) {
+      throw new BusinessError(
+        403,
+        `登录错误：项目 "${obj.name}" 已被禁用`
+      );
+    }
+    resolvedObjectId = obj.id;
   }
+
+  // —— flag != 0（业务禁用）→ 403 ——
+  // 必须在密码校验之后，防账号枚举
   if (user.flag !== 0) {
     throw new BusinessError(403, "账号已被标记为不可用，请联系管理员");
   }
 
-  // attachRoles 同步查 role_user + roles，挂 RoleBrief[] 到 user.roles
-  attachRoles([user as unknown as { id: number } & typeof user]);
+  // attachRoles 查 foose_role_user + foose_roles，挂 RoleBrief[] 到返回对象
+  // 注意：attachRoles 返回新数组，不原地修改 user，必须接返回值
+  const [withRoles] = await attachRoles(
+    [user as unknown as { id: number } & typeof user],
+    {
+      dsName: USER_DS_NAME,
+      userRoleTable: "foose_role_user",
+      roleTable: "foose_roles"
+    }
+  );
   return signLoginResult({
     sub: user.id,
     username: user.username,
     nickname: user.nickname,
-    object_id: user.object_id,
+    object_id: resolvedObjectId,
     tv: user.token_version,
     fingerprint,
+    ds: USER_DS_NAME,
     scope: undefined,
     extended: user.extended,
     avatar: user.avatar,
     permissions: user.permissions,
-    roles: (user as any).roles,
+    roles: withRoles.roles,
     email: user.email,
     phone: user.phone
   });
@@ -613,6 +745,8 @@ function signLoginResult(params: {
   object_id: number;
   tv: number;
   fingerprint: string;
+  /** 业务数据源名（如 "sqlite_demo"），admin-panel 留 undefined */
+  ds?: string;
   scope?: "admin-panel";
   extended: string | null;
   avatar: string | null;
@@ -628,6 +762,7 @@ function signLoginResult(params: {
     object_id,
     tv,
     fingerprint,
+    ds,
     scope,
     extended,
     avatar,
@@ -642,50 +777,54 @@ function signLoginResult(params: {
   const refreshJti = newJti();
   const familyId = randomBytes(12).toString("hex");
 
-  const accessPayload: JwtPayload = {
+  const commonPayload = {
     sub,
     username,
     nickname,
     iat: now,
-    exp: now + ACCESS_TOKEN_TTL,
-    type: "access",
     fp: fingerprint,
     tv,
-    jti: accessJti,
     object_id,
+    ...(ds ? { ds } : {}),
     ...(scope === "admin-panel" ? { scope: "admin-panel" as const } : {})
   };
+  const accessPayload: JwtPayload = {
+    ...commonPayload,
+    exp: now + ACCESS_TOKEN_TTL,
+    type: "access",
+    jti: accessJti
+  };
   const refreshPayload: JwtPayload = {
-    sub,
-    username,
-    nickname,
-    iat: now,
+    ...commonPayload,
     exp: now + REFRESH_TOKEN_TTL,
     type: "refresh",
-    fp: fingerprint,
-    tv,
-    jti: refreshJti,
-    object_id,
-    ...(scope === "admin-panel" ? { scope: "admin-panel" as const } : {})
+    jti: refreshJti
   };
 
   // 写 refresh_tokens（family_id 首次 generation=1）
+  // 临时关 FK：refresh_tokens.user_id 对 app.db.users 的 FK 不适用于业务用户（id 在其他数据源）
+  // 2026-09-22：加 ds 列标识所属数据源（"app"=admin-panel 配置库，其他=业务库名）
+  const dsValue = ds ?? "app";
+  const db = getDb();
+  db.exec("PRAGMA foreign_keys = OFF");
   try {
-    getDb()
+    db
       .prepare(
-        `INSERT INTO refresh_tokens(user_id, fingerprint, family_id, generation, jwt_id, valid, expires_at)
-         VALUES(?,?,?,?,?,?,?)`
+        `INSERT INTO refresh_tokens(user_id, ds, fingerprint, family_id, generation, jwt_id, valid, expires_at)
+         VALUES(?,?,?,?,?,?,?,?)`
       )
-      .run(sub, fingerprint, familyId, 1, refreshJti, 1, refreshPayload.exp);
+      .run(sub, dsValue, fingerprint, familyId, 1, refreshJti, 1, refreshPayload.exp);
   } catch {
     const retryJti = newJti();
     refreshPayload.jti = retryJti;
-    getDb()
+    db
       .prepare(
-        `INSERT INTO refresh_tokens(user_id, fingerprint, family_id, generation, jwt_id, valid, expires_at)
-         VALUES(?,?,?,?,?,?,?)`
+        `INSERT INTO refresh_tokens(user_id, ds, fingerprint, family_id, generation, jwt_id, valid, expires_at)
+         VALUES(?,?,?,?,?,?,?,?)`
       )
-      .run(sub, fingerprint, familyId, 1, retryJti, 1, refreshPayload.exp);
+      .run(sub, dsValue, fingerprint, familyId, 1, retryJti, 1, refreshPayload.exp);
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
   }
 
   return {
@@ -788,7 +927,7 @@ export async function refresh(refreshJwt: string, fingerprint: string): Promise<
   }
 
   // Step 1：完整验证 refresh_jwt（签名/过期/token_version/指纹 — 上面 fp 已提前判过，但仍要 verify 防篡改）
-  const payload = verifyToken(refreshJwt, fingerprint);
+  const payload = await verifyToken(refreshJwt, fingerprint);
   if (payload.type !== "refresh") {
     throw new BusinessError(400, "not a refresh token | 不是刷新令牌");
   }
@@ -870,7 +1009,7 @@ export async function refresh(refreshJwt: string, fingerprint: string): Promise<
     }
   }
   // 取用户「最新 tv」，保证新签发 token 的 tv 等于最新，避免 refresh 后立刻被 tv mismatch 拒绝
-  const latestTv = getUserAuthState(user.id)?.tv ?? user.token_version;
+  const latestTv = (await getUserAuthState(user.id))?.tv ?? user.token_version;
 
   // 继承原 token 的 scope（admin-panel scope 在 refresh 时保留）
   const inheritScope = payload.scope === "admin-panel" ? { scope: "admin-panel" as const } : {};
@@ -921,7 +1060,8 @@ export async function refresh(refreshJwt: string, fingerprint: string): Promise<
   rotateTokens();
 
   // attachRoles 查 role_user + roles 挂虚拟字段
-  attachRoles([user as unknown as { id: number } & typeof user]);
+  // 注意：attachRoles 返回新数组，必须接返回值
+  const [withRoles] = await attachRoles([user as unknown as { id: number } & typeof user]);
 
   return {
     expires: accessPayload.exp,
@@ -937,7 +1077,7 @@ export async function refresh(refreshJwt: string, fingerprint: string): Promise<
       extended: user.extended,
       avatar: user.avatar,
       permissions: user.permissions,
-      roles: (user as any).roles as RoleBrief[],
+      roles: withRoles.roles,
       email: user.email,
       phone: user.phone
     }
@@ -1010,6 +1150,6 @@ export function onUserCredentialChanged(uid: number, logoutEverywhere = true): v
       .prepare("SELECT DISTINCT family_id FROM refresh_tokens WHERE user_id = ? AND valid = 1")
       .all(uid) as { family_id: string }[];
     for (const f of families) revokeFamily(f.family_id, now, "pw_changed");
-    TV_CACHE.delete(uid);
+    TV_CACHE.delete(String(uid));
   }
 }

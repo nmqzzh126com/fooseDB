@@ -68,6 +68,18 @@ export class StubRedisCache implements Cache {
   async getTtl(): Promise<number> {
     return -2;
   }
+  async lpush(): Promise<number> {
+    return 0;
+  }
+  async ltrim(): Promise<void> {
+    /* noop */
+  }
+  async lrange(): Promise<string[]> {
+    return [];
+  }
+  async llen(): Promise<number> {
+    return 0;
+  }
 }
 
 /* ==========================================================================
@@ -161,6 +173,20 @@ export class RealRedisCache implements Cache {
   }
   async getTtl(key: string): Promise<number> {
     return this.client!.ttl(key);
+  }
+
+  // ————— List 命令 —————
+  async lpush(key: string, value: string): Promise<number> {
+    return this.client!.lpush(key, value);
+  }
+  async ltrim(key: string, start: number, stop: number): Promise<void> {
+    await this.client!.ltrim(key, start, stop);
+  }
+  async lrange(key: string, start: number, stop: number): Promise<string[]> {
+    return this.client!.lrange(key, start, stop);
+  }
+  async llen(key: string): Promise<number> {
+    return this.client!.llen(key);
   }
 
   /* ========================================================================

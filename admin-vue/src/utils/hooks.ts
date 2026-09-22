@@ -102,11 +102,11 @@ export function useTabRole() {
  
 
 /** 旧接口保留：useTabTestApiDetail() → toTabTestApiByQuery 系列 */
-export function useTabTestApiDetail() {
-  const { toTab, initToTab, getParameter, router } = useDynamicTab({
-    path: "/object/test-api",
-    name: "ObjectTestApi",
-    title: "接口测试"
-  });
-  return { toTabTestApiByQuery: toTab, initToTestApiDetail: initToTab, getParameter, router };
-}
+// export function useTabTestApiDetail() {
+//   const { toTab, initToTab, getParameter, router } = useDynamicTab({
+//     path: "/object/test-api",
+//     name: "ObjectTestApi",
+//     title: "接口测试"
+//   });
+//   return { toTabTestApiByQuery: toTab, initToTestApiDetail: initToTab, getParameter, router };
+// }

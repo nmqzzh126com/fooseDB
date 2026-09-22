@@ -90,7 +90,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // GET 列表：仅 system admin 可读
   fastify.get("/api/config/query-templates", async (request, reply) => {
     try {
-      requireSystemAdminForManage({
+      await requireSystemAdminForManage({
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -105,7 +105,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/config/query-templates/:id",
     async (request, reply) => {
       try {
-        requireSystemAdminForManage({
+        await requireSystemAdminForManage({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -122,7 +122,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: CreateQueryTemplateSchema as never } },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -139,7 +139,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: UpdateQueryTemplateSchema as never } },
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -155,7 +155,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/config/query-templates/:id",
     async (request, reply) => {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });

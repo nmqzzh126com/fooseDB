@@ -1,25 +1,24 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onMounted, provide, ref } from "vue";
-import { Edit, Search, Refresh, CirclePlus, Delete } from "@element-plus/icons-vue";
+import { defineAsyncComponent, onMounted, provide, ref, reactive } from "vue";
+import {
+  Edit,
+  Search,
+  Refresh,
+  CirclePlus,
+  Delete
+} from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
 import { FooseListParams } from "@/api/foose_db";
-import FooseTools from "@/api/foose_db_tools";
+import { FooseTools } from "@/api/foose_db";
 import { ElMessage } from "element-plus";
-import { ProductLabelRow, useProductLabel } from "@/api/demo/product_label_api";
+import {
+  ProductLabelRow,
+  useProductLabel,
+  CONFIG as productLabelConfig
+} from "@/api/demo/product_label_api";
 
-const {
-  productLabelDbDataList,
-  productLabelDbLoading,
-  productLabelDbError,
-  productLabelDbPage,
-  productLabelDbPageSize,
-  productLabelDbTotal,
-  productLabelDbList,
-  productLabelDbCreate,
-  productLabelDbUpdate,
-  productLabelDbRemoves,
-  productLabelDbRemovesByFilter
-} = useProductLabel();
+const productLabel = reactive(useProductLabel());
+
 const editProductLabel = defineAsyncComponent(async () => {
   return import("@/views/test_api/edit_label.vue");
 });
@@ -56,7 +55,7 @@ const loadPageList = async () => {
   }
   // —— 构建查询参数（Directus 风格 filter）——
   const params: FooseListParams = {
-    showSql: true,//是否显示SQL语句
+    showSql: true, //是否显示SQL语句
     page: defautPageIndex.value,
     pageSize: defaultPageSize.value,
     //noPage: true,
@@ -66,23 +65,23 @@ const loadPageList = async () => {
     joins: [
       // 一对一关联
       {
-        table: "product",//必填项
-        joinType: "left",//"left" | "inner"; 
-        as: "pdt",//关联别名,同一子表多次关联时,需要指定别名,否则会报错
-        type: "one",//one（主表→子表，FK 在主表）,many（子表→主表反向查，FK 在子表）
+        table: productLabelConfig.table, //必填项（与 sqlite_demo 真实表名一致）
+        joinType: "left", //"left" | "inner";
+        as: "pdt", //关联别名,同一子表多次关联时,需要指定别名,否则会报错
+        type: "one", //one（主表→子表，FK 在主表）,many（子表→主表反向查，FK 在子表）
         on: {
           local: "product_id",
           foreign: "id"
         }
-      },
-    ],
+      }
+    ]
   };
 
   try {
-    const res = await productLabelDbList(params);
+    const res = await productLabel.getPageList(params);
     // console.log(res);
     // console.log(res.sql, res.sqlParams);
-    // console.log(productLabelDbPage.value, productLabelDbPageSize.value, productLabelDbTotal.value);
+    // console.log(productLabel.page, productLabel.pageSize, productLabel.total);
   } catch (e) {
     console.error("加载失败:", e instanceof Error ? e.message : e);
   }
@@ -122,9 +121,9 @@ async function handleAdd() {
   const newRow: any = {
     my_id: FooseTools.createUuid(),
     title: "新标签名称",
-    flag: 0,
+    flag: 0
   };
-  const res = await productLabelDbCreate(newRow);
+  const res = await productLabel.create(newRow);
   if (!res) {
     ElMessage.error("添加失败");
     return;
@@ -136,7 +135,7 @@ async function handleAdd() {
 /** 删除 */
 // async function handleRemove(rowId: number) {
 //   //console.log("删除", rowId);
-//   const { ok, deleted } = await productTypeDbRemove(rowId);
+//   const { ok, deleted } = await productLabel.remove(rowId);
 //   if (!ok) {
 //     ElMessage.error("删除失败");
 //     return;
@@ -156,7 +155,9 @@ async function handleFlag(rowId: number, flag: number) {
     return;
   }
   const newFlag = flag === 0 ? 1 : 0;
-  const row: ProductLabelRow = await productLabelDbUpdate(rowId, { flag: newFlag });
+  const row: ProductLabelRow = await productLabel.update(rowId, {
+    flag: newFlag
+  });
   if (!row) {
     ElMessage.error("状态切换失败");
     return;
@@ -164,7 +165,6 @@ async function handleFlag(rowId: number, flag: number) {
   debounceLoadList();
   ElMessage.success(`状态切换成功`);
 }
-
 </script>
 <template>
   <div>
@@ -172,23 +172,43 @@ async function handleFlag(rowId: number, flag: number) {
       <div class="left">
         <el-row :gutter="8">
           <el-col :span="24">
-            <el-input v-model="queryLabelName" placeholder="标签名称" clearable @keyup.enter="debounceLoadList"
-              @clear="debounceLoadList" />
+            <el-input
+              v-model="queryLabelName"
+              placeholder="标签名称"
+              clearable
+              @keyup.enter="debounceLoadList"
+              @clear="debounceLoadList"
+            />
           </el-col>
         </el-row>
       </div>
       <div class="right">
-        <el-button type="primary" :loading="productLabelDbLoading" :icon="Search"
-          @click="debounceLoadList">查询</el-button>
-        <el-button :icon="Refresh" type="info" @click="handleResetQuery">重置</el-button>
-        <el-button :icon="CirclePlus" type="success" @click="handleAdd">添加</el-button>
+        <el-button
+          type="primary"
+          :loading="productLabel.loading"
+          :icon="Search"
+          @click="debounceLoadList"
+          >查询</el-button
+        >
+        <el-button :icon="Refresh" type="info" @click="handleResetQuery"
+          >重置</el-button
+        >
+        <el-button :icon="CirclePlus" type="success" @click="handleAdd"
+          >添加</el-button
+        >
 
-        <el-text v-if="productLabelDbError" class="mx-1" type="danger">
-          {{ productLabelDbError }}
+        <el-text v-if="productLabel.errorInfo" class="mx-1" type="danger">
+          {{ productLabel.errorInfo }}
         </el-text>
       </div>
     </div>
-    <el-table :data="productLabelDbDataList" row-key="my_id" stripe border style="width: 100%">
+    <el-table
+      :data="productLabel.listResult"
+      row-key="my_id"
+      stripe
+      border
+      style="width: 100%"
+    >
       <el-table-column prop="my_id" label="标签ID" width="300" align="center">
         <template #default="scope">
           <el-text class="mx-1" type="info" size="small">
@@ -221,29 +241,52 @@ async function handleFlag(rowId: number, flag: number) {
       </el-table-column>
       <el-table-column fixed="right" label="操作" width="200" align="center">
         <template #default="scope">
-          <el-button type="primary" :icon="Edit" @click="handleEdit(scope.row.my_id)">
+          <el-button
+            type="primary"
+            :icon="Edit"
+            @click="handleEdit(scope.row.my_id)"
+          >
             编辑
           </el-button>
-          <el-button :type="scope.row.flag === 1 ? 'success' : 'danger'" :icon="Delete"
-            @click="handleFlag(scope.row.my_id, scope.row.flag)">
+          <el-button
+            :type="scope.row.flag === 1 ? 'success' : 'danger'"
+            :icon="Delete"
+            @click="handleFlag(scope.row.my_id, scope.row.flag)"
+          >
             {{ scope.row.flag === 0 ? "禁用" : "启用" }}
           </el-button>
         </template>
       </el-table-column>
     </el-table>
     <div class="mt-3 pagination-container">
-      <el-pagination v-model:current-page="defautPageIndex" v-model:page-size="defaultPageSize" size="default"
-        :page-sizes="[5, 10, 20, 50, 100]" layout="total, sizes, prev, pager, next, jumper" :total="productLabelDbTotal"
-        @size-change="handleSizeChange" @current-change="handleCurrentChange" />
+      <el-pagination
+        v-model:current-page="defautPageIndex"
+        v-model:page-size="defaultPageSize"
+        size="default"
+        :page-sizes="[5, 10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="productLabel.total"
+        @size-change="handleSizeChange"
+        @current-change="handleCurrentChange"
+      />
     </div>
     <!-- 编辑弹窗 -->
-    <el-dialog v-model="dialogEditVisible" :title="currentId.length > 0 ? '编辑产品标签' : '添加产品标签'" align-center width="70vw"
-      destroy-on-close draggable :modal="true" :close-on-click-modal="false" :close-on-press-escape="false">
+    <el-dialog
+      v-model="dialogEditVisible"
+      :title="currentId.length > 0 ? '编辑产品标签' : '添加产品标签'"
+      align-center
+      width="70vw"
+      destroy-on-close
+      draggable
+      :modal="true"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+    >
       <edit-product-label :id="currentId" />
     </el-dialog>
   </div>
 </template>
-<style lang='scss' scoped>
+<style lang="scss" scoped>
 .flex_row {
   display: flex;
   width: 100%;

@@ -39,6 +39,7 @@ const objectForm = ref<ObjectDef>({
   cors_methods: "GET,POST,PUT,DELETE,OPTIONS",
   auth_required: 1 as 0 | 1,
   enabled: 1 as 0 | 1,
+  debug: 0 as 0 | 1,
   custom_sql_enabled: 0 as 0 | 1
 });
 const objectRules = {
@@ -100,7 +101,7 @@ async function loadObject() {
     if (res && res.id > 0) {
       objectForm.value = res;
       //** 允许CORS跨域方法,字符串转换为数组,逗号分隔
-      corsMethodsResult.value = objectForm.value.cors_methods.split(",");
+      corsMethodsResult.value = objectForm.value.cors_methods?.split(",") || [];
     } else {
       ElMessage({
         type: 'error',
@@ -274,6 +275,8 @@ function validateForm(isEdit: boolean): { ok: boolean, message: string, form: Ob
     result = false;
   }
 
+  objectForm.value.debug = objectForm.value.debug ? 1 : 0; //** 调试日志开关 0:关闭 1:开启
+
   if (objectForm.value.db_type === "sqlite") {
     objectForm.value.db_url = "";
   } else {
@@ -292,7 +295,7 @@ function validateForm(isEdit: boolean): { ok: boolean, message: string, form: Ob
         cors_methods: objectForm.value.cors_methods || defaultMethods,
         auth_required: objectForm.value.auth_required || 0,
         enabled: objectForm.value.enabled === 0 ? 0 : 1,
-        //custom_sql_enabled: objectForm.value.custom_sql_enabled || 0 暂时不支持自定义SQL  
+        debug: objectForm.value.debug === 0 ? 0 : 1
 
       } as ObjectDef
     };
@@ -308,6 +311,7 @@ function validateForm(isEdit: boolean): { ok: boolean, message: string, form: Ob
         cors_methods: objectForm.value.cors_methods || defaultMethods,
         auth_required: objectForm.value.auth_required || 0,
         enabled: objectForm.value.enabled === 0 ? 0 : 1,
+        debug: objectForm.value.debug === 0 ? 0 : 1,
         //custom_sql_enabled: objectForm.value.custom_sql_enabled || 0 暂时不支持自定义SQL  
       } as ObjectDef
     };
@@ -347,7 +351,7 @@ function handleDbTypeChange(value: MyDbType) {
           <el-button type="success" plain :loading="testStatusIsBusy" :icon="Operation" @click="handleTestDbConnection">
             测试连接
           </el-button>
-          <el-button type="primary" :disabled="objectForm.name == 'sqlite_demo'" :icon="CircleCheck"
+          <el-button type="primary"  :icon="CircleCheck"
             :loading="saveStatusIsBusy" @click="handleSubmit">
             {{ isEdit ? "保存" : "创建" }}
           </el-button>
@@ -412,6 +416,13 @@ function handleDbTypeChange(value: MyDbType) {
               </el-form-item>
             </el-col>
             <el-col :span="12">
+              <el-form-item label="开启调试日志" prop="debug">
+                <el-switch v-model="objectForm.debug" :active-value="1" :inactive-value="0"
+                  active-text="记录接口请求/响应" inactive-text="关闭（生产环境推荐）" inline-prompt
+                  style="--el-switch-on-color: #e6a23c; --el-switch-off-color: #909399" /> 
+              </el-form-item>
+            </el-col>
+            <el-col :span="24">
               <el-form-item label="允许请求方法">
                 <div class="demo-button-style">
                   <el-checkbox-group v-model="corsMethodsResult" size="small">
@@ -456,5 +467,12 @@ function handleDbTypeChange(value: MyDbType) {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+}
+
+.form-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary, #909399);
 }
 </style>

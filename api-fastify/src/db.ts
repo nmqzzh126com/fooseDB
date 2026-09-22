@@ -164,6 +164,7 @@ export async function initDb(db?: Database.Database): Promise<void> {
       custom_sql_enabled  INTEGER NOT NULL DEFAULT 0,         -- 是否允许自定义 SQL（0=关闭 1=开启）
       auth_required       INTEGER NOT NULL DEFAULT 0,        -- 调用接口是否先进行 auth 认证（0=默认不开启 1=开启）
       enabled             INTEGER NOT NULL DEFAULT 1,         -- 项目启用/禁用（0=禁用，拒绝所有请求；1=启用）
+      debug               INTEGER NOT NULL DEFAULT 0,         -- 是否开启接口调试日志（0=关闭 1=开启；开启后接口请求/响应记录到 Redis）
       created_at          INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
     );
 
@@ -230,7 +231,8 @@ export async function initDb(db?: Database.Database): Promise<void> {
     --   · 登出时把该用户本人所有 family 置 valid=0；expired_at 清理可用定时脚本按天扫。
     CREATE TABLE IF NOT EXISTS refresh_tokens (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id        INTEGER NOT NULL,
+      ds             TEXT NOT NULL DEFAULT 'app',   -- 所属数据源：app=admin-panel 配置库；其他=业务库名
       fingerprint    TEXT NOT NULL,                 -- 绑定的客户端指纹；换设备必须重新登录
       family_id      TEXT NOT NULL,                 -- 轮换链 id（同一 family 共享，首次登录生成）
       generation     INTEGER NOT NULL DEFAULT 1,    -- 轮换代次：每次 refresh +1
@@ -245,6 +247,16 @@ export async function initDb(db?: Database.Database): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_rt_fam  ON refresh_tokens(family_id);
     CREATE INDEX IF NOT EXISTS idx_rt_jti  ON refresh_tokens(jwt_id);
   `);
+
+  // —— migration：refresh_tokens 加 ds 列 + 索引（支持跨数据源业务用户 token）——
+  // 必须放在上面巨大 CREATE TABLE exec 之后——旧表没有 ds 列，CREATE INDEX ON ds 会崩
+  try {
+    d.prepare("SELECT ds FROM refresh_tokens LIMIT 0").get() as unknown;
+  } catch {
+    d.exec("ALTER TABLE refresh_tokens ADD COLUMN ds TEXT NOT NULL DEFAULT 'app'");
+    console.log("[db] upgraded refresh_tokens: added ds column (default 'app')");
+  }
+  d.exec("CREATE INDEX IF NOT EXISTS idx_rt_ds ON refresh_tokens(ds)");
 
   // —— 种子数据（仅空表时插入，密码用 bcrypt 哈希）——
   // 先保证升级兼容：老表没有 token_version / object_id 列时补齐（CREATE TABLE IF NOT EXISTS 不会加新列）。
@@ -301,7 +313,7 @@ export async function initDb(db?: Database.Database): Promise<void> {
     // shadow 行密码用不可猜的 bcrypt 哈希，即使有人改了 .env ADMIN_USERNAME，
     // 旧 admin 用户名也无法通过 users 表路径登录（安全兜底）。
     const adminShadowHash = await bcrypt.hash("__admin_shadow_never_login__", BCRYPT_COST);
-    const demoHash = await bcrypt.hash("demo123", BCRYPT_COST);
+    const demoHash = await bcrypt.hash("admin123456!@#", BCRYPT_COST);
     d.prepare("INSERT INTO users(username, nickname, password, object_id) VALUES(?,?,?,?)").run(
       "admin",
       "超级管理员(shadow)",
@@ -346,7 +358,8 @@ export async function initDb(db?: Database.Database): Promise<void> {
     ["cors_origins", "TEXT"],
     ["cors_methods", "TEXT"],
     ["custom_sql_enabled", "INTEGER NOT NULL DEFAULT 0"],
-    ["enabled", "INTEGER NOT NULL DEFAULT 1"]
+    ["enabled", "INTEGER NOT NULL DEFAULT 1"],
+    ["debug", "INTEGER NOT NULL DEFAULT 0"]
   ] as const;
   let needMigration = false;
   for (const [col, typeDef] of newCols) {

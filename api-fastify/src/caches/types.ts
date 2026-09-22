@@ -48,6 +48,16 @@ export interface Cache {
   expire(key: string, seconds: number): Promise<boolean>;
   /** >=0: 剩余 TTL(秒)；-1: 无过期时间；-2: key 不存在 */
   getTtl(key: string): Promise<number>;
+
+  /* ========== List 命令（debug 日志专用） ========== */
+  /** 头部插入，返回当前列表长度 */
+  lpush(key: string, value: string): Promise<number>;
+  /** 保留 [start, stop] 范围内的元素（负索引从尾部数，-1=最后一个） */
+  ltrim(key: string, start: number, stop: number): Promise<void>;
+  /** 返回 [start, stop] 范围内的元素（LRANGE 语义） */
+  lrange(key: string, start: number, stop: number): Promise<string[]>;
+  /** 返回列表长度 */
+  llen(key: string): Promise<number>;
 }
 
 /**

@@ -59,7 +59,7 @@ const { locale, translationCh, translationEn } = useTranslationLang();
 
 const ruleForm = reactive({
   username: "demo",
-  password: "admin123!@#",
+  password: "admin123456!@#",
   verifyCode: ""
 });
 

@@ -30,11 +30,11 @@ export default {
       }
     },
     {
-      path: "/welcome/object_users",
-      name: "ObjectUsers",
-      component: () => import("@/views/welcome/object_user/index.vue"),
+      path: "/welcome/object_tables",
+      name: "ObjectTables",
+      component: () => import("@/views/welcome/object_table/index.vue"),
       meta: {
-        title: "用户设置",
+        title: "数据表设置",
         showLink: false
       }
     },

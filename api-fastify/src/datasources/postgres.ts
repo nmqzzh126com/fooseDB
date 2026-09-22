@@ -1,128 +1,145 @@
 /**
- * PostgreSQL 数据源 adapter（骨架桩，预留未完成，查询/事务方法尚未接真实驱动）。
+ * PostgreSQL 数据源 adapter（pg.Pool 实现）。
  *
- * 接入步骤（用户自行启用，不强制依赖）：
- *   1. pnpm add pg，并把下方 query/run/transaction 桩替换为真实 pg 实现
- *   2. 在 object 表建一行：db_type=postgres，db_url=postgres://user:pass@host:5432/dbname
- *   3. 在 service 里：const db = getDs("<object.name>");
+ * 接入方式：
+ *   1. 在 object 表建一行项目（管理端 /api/config/objects）：
+ *        db_type=postgres，db_url=postgres://user:pass@host:5432/dbname
+ *      启动 / 创建项目时 registry 自动用本 adapter 注册连接，key = object.name。
+ *   2. Service 层统一写 ? 占位符，adapter 内部自动转为 pg 的 $1/$2/... 序号占位。
+ *   3. 连接池 pg.Pool 默认 10 连接，自动 idle 回收。
  */
 
+import type { Pool, PoolClient } from "pg";
 import type { Datasource, RunResult, TableInfo } from "./types.js";
 import type { DataSourceDecl } from "../config/env.js";
+
+/**
+ * 把 SQL 里的 ? 占位符按出现顺序转为 $1 $2 $3 …
+ * （简单替换：字符串字面量内含 ? 的场景不处理，Service 层不写这种 SQL）
+ */
+function convertPlaceholders(sql: string): string {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
 
 export class PostgresDataSource implements Datasource {
   public readonly type = "postgres";
   public readonly name: string;
   public readonly url: string;
 
+  private _pool: Pool | null = null;
+  /** 事务进行中时指向事务专用 client，query/run 走它保证同一会话 */
+  private _txClient: PoolClient | null = null;
+
   constructor(decl: DataSourceDecl) {
-    if (decl.type !== "postgres")
-      throw new Error(`PostgresDataSource: ${decl.name} type!=postgres`);
+    if (decl.type !== "postgres") throw new Error(`PostgresDataSource: ${decl.name} type!=postgres`);
     this.name = decl.name;
     this.url = decl.url ?? "";
   }
 
   async open(): Promise<void> {
-    console.warn(
-      `[ds][${this.name}] PostgreSQL adapter 骨架桩（未启用 pg driver）。启用说明见 src/datasources/postgres.ts 头部。`
+    if (this._pool) return;
+    const pg = await import("pg");
+    this._pool = new pg.Pool({ connectionString: this.url });
+    // ping 一次，让启动时立即暴露连接串错误
+    const client = await this._pool.connect();
+    try {
+      await client.query("SELECT 1 AS ok");
+    } finally {
+      client.release();
+    }
+    const u = new URL(this.url);
+    console.log(
+      `[ds][${this.name}] pg connected: ${u.hostname}:${u.port || 5432}${u.pathname}`
     );
   }
 
   async close(): Promise<void> {
-    // noop (桩)
+    if (!this._pool) return;
+    await this._pool.end();
+    this._pool = null;
+  }
+
+  private requirePool(): Pool {
+    if (!this._pool) throw new Error(`[ds][${this.name}] PostgreSQL not open`);
+    return this._pool;
+  }
+
+  private pickClient(): PoolClient | Pool {
+    return this._txClient ?? this.requirePool();
   }
 
   async query<T extends object = Record<string, unknown>>(
-    _sql: string,
-    _params?: unknown[]
+    sql: string,
+    params: unknown[] = []
   ): Promise<T[]> {
-    throw new Error(
-      `[ds][${this.name}] PostgreSQL driver 未启用，无法 query。请 pnpm add pg 并实现本类。`
-    );
+    const client = this.pickClient();
+    const pgSql = convertPlaceholders(sql);
+    const { rows } = await client.query(pgSql, params);
+    return rows as T[];
   }
 
-  async run(_sql: string, _params?: unknown[]): Promise<RunResult> {
-    throw new Error(`[ds][${this.name}] PostgreSQL driver 未启用。`);
+  async run(sql: string, params: unknown[] = []): Promise<RunResult> {
+    const client = this.pickClient();
+    const pgSql = convertPlaceholders(sql);
+    const result = await client.query(pgSql, params);
+    // INSERT 可以带 RETURNING id，UPDATE/DELETE 只靠 rowCount
+    const changes = Number(result.rowCount ?? 0);
+    let lastId: number | bigint = 0;
+    if (result.command === "INSERT" && result.rows.length > 0) {
+      const first = result.rows[0] as Record<string, unknown>;
+      // pg 约定 INSERT ... RETURNING id 时第一列就是 id
+      const idVal = Object.values(first)[0];
+      if (typeof idVal === "number") lastId = idVal;
+      else if (typeof idVal === "bigint") lastId = idVal;
+      else if (idVal != null) lastId = Number(idVal);
+    }
+    return { lastInsertRowid: lastId, changes };
   }
 
   async transaction<T>(fn: (tx: Datasource) => Promise<T>): Promise<T> {
-    return fn(this); // 桩：无真正事务
+    const client = await this.requirePool().connect();
+    try {
+      await client.query("BEGIN");
+      this._txClient = client;
+      const result = await fn(this);
+      await client.query("COMMIT");
+      return result;
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch { /* ignore rollback errors */ }
+      throw e;
+    } finally {
+      this._txClient = null;
+      client.release();
+    }
   }
 
-  async listTables(_excludeTables?: string[], _tableName?: string): Promise<TableInfo[]> {
-    throw new Error(
-      `[ds][${this.name}] PostgreSQL driver 未启用，无法 listTables。请 pnpm add pg 并实现本类。`
-    );
+  async listTables(excludeTables?: string[], tableName?: string): Promise<TableInfo[]> {
+    const client = this.pickClient();
+    const exclude = excludeTables?.filter(Boolean) ?? [];
+    const like = tableName?.trim() ? `%${tableName.trim()}%` : null;
+
+    let sql =
+      "SELECT table_name AS name FROM information_schema.tables " +
+      "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'";
+    const params: unknown[] = [];
+    if (like) {
+      sql += " AND table_name LIKE $1";
+      params.push(like);
+    }
+    let placeholderIdx = params.length + 1;
+    for (const ex of exclude) {
+      sql += ` AND table_name NOT LIKE $${placeholderIdx++}`;
+      params.push(`%${ex}%`);
+    }
+    sql += " ORDER BY table_name";
+
+    const pgSql = convertPlaceholders(sql);
+    const { rows } = await client.query(pgSql, params);
+    return (rows as Array<{ name: string }>).map(r => ({
+      name: r.name,
+      comment: undefined,
+      rows: undefined
+    }));
   }
 }
-
-/* ==========================================================================
- * ===== 接入示例（取消下列注释 + 运行 pnpm add pg 即可真实启用）=====
- * 说明：
- *   - 占位符：pg 原生使用 $1 / $2 / ... 序号占位；示例代码里额外做了「把
- *     本接口的 params[] 统一转为 pg 占位符」，避免 Service 层为不同 DB 改 SQL。
- *   - 连接池：pg.Pool 默认 10 连接，自动 idle 回收。
- *   - 事务：client 级 BEGIN / fn / COMMIT / ROLLBACK。
- * ----------------------------------------------------------------
-import type { Pool, PoolClient } from "pg";
-
-// —— 替换类里以下 2 个私有字段：
-// private _pool: Pool | null = null;
-// private _txClient: WeakMap<Datasource, PoolClient> = new WeakMap();
-
-// function convertPlaceholders(sql: string): { sql: string } {
-//   // 把 SQL 里的 ? 占位按出现顺序转为 $1 $2 …（仅限简单场景；字符串字面量内含 ? 不处理）
-//   let i = 0;
-//   const out = sql.replace(/\?/g, () => `$${++i}`);
-//   return { sql: out };
-// }
-//
-// async open(): Promise<void> {
-//   const pgModule = await import("pg");
-//   const PoolCtor = pgModule.Pool;
-//   this._pool = new PoolCtor({ connectionString: this.url });
-//   const { rows } = await this._pool.query("SELECT 1 AS ok");
-//   console.log(`[ds][${this.name}] pg connected, ping=${JSON.stringify(rows)}`);
-// }
-//
-// async close(): Promise<void> {
-//   await this._pool?.end();
-//   this._pool = null;
-// }
-//
-// async query<T extends object = Record<string, unknown>>(
-//   sql: string, params: unknown[] = []
-// ): Promise<T[]> {
-//   const client = this._txClient.get(this) ?? (this._pool as Pool);
-//   const { sql: pgSql } = convertPlaceholders(sql);
-//   const { rows } = await client.query(pgSql, params as any[]);
-//   return rows as T[];
-// }
-//
-// async run(sql: string, params: unknown[] = []): Promise<RunResult> {
-//   const client = this._txClient.get(this) ?? (this._pool as Pool);
-//   const { sql: pgSql } = convertPlaceholders(sql);
-//   // INSERT 建议自己在 SQL 末尾写 RETURNING id, 1 AS affected；这里给一个兜底实现：
-//   const result = await (client as any).query(pgSql + " RETURNING 1 AS _r", params as any[]);
-//   const rowCount = Number(result.rowCount ?? 0);
-//   const lastId = result.rows?.[0]?.id ? Number(result.rows[0].id) : 0;
-//   return { lastInsertRowid: lastId, changes: rowCount };
-// }
-//
-// async transaction<T>(fn: (tx: Datasource) => Promise<T>): Promise<T> {
-//   const client = await (this._pool as Pool).connect();
-//   try {
-//     await client.query("BEGIN");
-//     this._txClient.set(this, client);
-//     const r = await fn(this);
-//     await client.query("COMMIT");
-//     return r;
-//   } catch (e) {
-//     await client.query("ROLLBACK");
-//     throw e;
-//   } finally {
-//     this._txClient.delete(this);
-//     client.release();
-//   }
-// }
-========================================================================== */

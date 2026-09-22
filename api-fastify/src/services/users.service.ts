@@ -90,8 +90,7 @@ function assertValidObjectId(value: number | undefined, label: string): number {
   if (n === -1 || n === 0) return n;
   if (n >= 1) {
     const exists = getDb().prepare("SELECT 1 AS ok FROM object WHERE id = ? LIMIT 1").get(n) as
-      | { ok: number }
-      | undefined;
+      { ok: number } | undefined;
     if (!exists) {
       throw new BusinessError(400, `${label}=${n} 无效：object 表中不存在 id=${n} 的项目`);
     }
@@ -131,26 +130,68 @@ export interface PageResult<T> {
  * 用 getDb()（better-sqlite3 同步）直接查 app.db 的 role_user + roles。
  * 批量 N+1 合并成 1 次查询，O(B) 绑定数返回。
  */
-export function attachRoles<T extends { id: number }>(
-  rows: T[]
-): (T & { roles: RoleBrief[] })[] {
+export interface AttachRolesOptions {
+  /** 数据源名；缺省则走 app.db（getDb()） */
+  dsName?: string;
+  /** 关联表名，默认 "role_user"；业务库可能叫 "foose_role_user" */
+  userRoleTable?: string;
+  /** 角色表名，默认 "roles"；业务库可能叫 "foose_roles" */
+  roleTable?: string;
+  /** 关联表指向用户的列名，默认 "user_id" */
+  userFkCol?: string;
+  /** 关联表指向角色的列名，默认 "role_id" */
+  roleFkCol?: string;
+}
+
+export async function attachRoles<T extends { id: number }>(
+  rows: T[],
+  opts: AttachRolesOptions = {}
+): Promise<(T & { roles: RoleBrief[] })[]> {
   if (rows.length === 0) return rows.map(r => ({ ...r, roles: [] as RoleBrief[] }));
   const ids = rows.map(r => r.id);
   const placeholders = ids.map(() => "?").join(",");
-  const db = getDb();
-  const bindings = db
-    .prepare(
-      `SELECT ru.user_id, r.id, r.role_name, r.flag
-       FROM role_user ru
-       LEFT JOIN roles r ON ru.role_id = r.id
-       WHERE ru.user_id IN (${placeholders})`
-    )
-    .all(...ids) as Array<{ user_id: number; id: number; role_name: string; flag: number }>;
+
+  const {
+    dsName,
+    userRoleTable = "role_user",
+    roleTable = "roles",
+    userFkCol = "user_id",
+    roleFkCol = "role_id"
+  } = opts;
+
+  let bindings: Array<{ [k: string]: unknown }>;
+  if (dsName) {
+    // —— 业务库走 generic datasource（async） ——
+    const ds = getDs(dsName);
+    bindings = await ds.query(
+      `SELECT ru.${userFkCol} AS _uid, r.id, r.role_name, r.flag
+       FROM "${userRoleTable}" ru
+       LEFT JOIN "${roleTable}" r ON ru.${roleFkCol} = r.id
+       WHERE ru.${userFkCol} IN (${placeholders})`,
+      ids
+    );
+  } else {
+    // —— admin-panel 走 app.db 固定库（better-sqlite3 同步） ——
+    const db = getDb();
+    bindings = db
+      .prepare(
+        `SELECT ru.${userFkCol} AS _uid, r.id, r.role_name, r.flag
+         FROM ${userRoleTable} ru
+         LEFT JOIN ${roleTable} r ON ru.${roleFkCol} = r.id
+         WHERE ru.${userFkCol} IN (${placeholders})`
+      )
+      .all(...ids) as Array<{ _uid: number; id: number; role_name: string; flag: number }>;
+  }
 
   const map = new Map<number, RoleBrief[]>();
-  for (const b of bindings) {
-    if (!map.has(b.user_id)) map.set(b.user_id, []);
-    map.get(b.user_id)!.push({ id: b.id, role_name: b.role_name, flag: b.flag });
+  for (const b of bindings as Array<{
+    _uid: number;
+    id: number;
+    role_name: string;
+    flag: number;
+  }>) {
+    if (!map.has(b._uid)) map.set(b._uid, []);
+    map.get(b._uid)!.push({ id: b.id, role_name: b.role_name, flag: b.flag });
   }
   return rows.map(row => ({
     ...row,
@@ -197,24 +238,20 @@ export async function listUsers(
   const offset = (page - 1) * pageSize;
 
   const sql =
-    `SELECT ${USER_SELECT_COLS} FROM users` +
-    whereSql +
-    " ORDER BY id DESC" +
-    " LIMIT ? OFFSET ?";
+    `SELECT ${USER_SELECT_COLS} FROM users` + whereSql + " ORDER BY id DESC" + " LIMIT ? OFFSET ?";
   const rows = (await db.query<UserRow>(sql, [...params, pageSize, offset])) as UserRow[];
 
   // 挂 roles 虚拟字段
-  const items = attachRoles(rows);
+  const items = await attachRoles(rows);
   return { items, total, page, pageSize };
 }
 
 export async function getUser(id: number): Promise<UserRow> {
   const db = getDs(DS_NAME);
-  const rows = attachRoles(
-    (await db.query<UserRow>(
-      `SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`,
-      [id]
-    )) as UserRow[]
+  const rows = await attachRoles(
+    (await db.query<UserRow>(`SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`, [
+      id
+    ])) as UserRow[]
   );
   if (rows.length === 0) throw new BusinessError(404, "User not found | 用户不存在");
   return rows[0];
@@ -229,12 +266,30 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
     // 动态拼 INSERT：带哪些字段取决于传入了啥
     const cols = ["username", "password", "object_id", "flag"];
     const values: unknown[] = [input.username, hashedPw, objectId, flag];
-    if (input.nickname !== undefined) { cols.push("nickname"); values.push(input.nickname ?? null); }
-    if (input.email !== undefined) { cols.push("email"); values.push(input.email ?? null); }
-    if (input.phone !== undefined) { cols.push("phone"); values.push(input.phone ?? null); }
-    if (input.avatar !== undefined) { cols.push("avatar"); values.push(input.avatar ?? null); }
-    if (input.permissions !== undefined) { cols.push("permissions"); values.push(input.permissions ?? null); }
-    if (input.extended !== undefined) { cols.push("extended"); values.push(input.extended ?? null); }
+    if (input.nickname !== undefined) {
+      cols.push("nickname");
+      values.push(input.nickname ?? null);
+    }
+    if (input.email !== undefined) {
+      cols.push("email");
+      values.push(input.email ?? null);
+    }
+    if (input.phone !== undefined) {
+      cols.push("phone");
+      values.push(input.phone ?? null);
+    }
+    if (input.avatar !== undefined) {
+      cols.push("avatar");
+      values.push(input.avatar ?? null);
+    }
+    if (input.permissions !== undefined) {
+      cols.push("permissions");
+      values.push(input.permissions ?? null);
+    }
+    if (input.extended !== undefined) {
+      cols.push("extended");
+      values.push(input.extended ?? null);
+    }
 
     const placeholders = cols.map(() => "?").join(",");
     const res = await db.run(
@@ -244,11 +299,10 @@ export async function createUser(input: CreateUserInput): Promise<UserRow> {
     const id = Number(res.lastInsertRowid);
 
     // 返回完整记录 + 挂 roles
-    const rows = attachRoles(
-      (await db.query<UserRow>(
-        `SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`,
-        [id]
-      )) as UserRow[]
+    const rows = await attachRoles(
+      (await db.query<UserRow>(`SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`, [
+        id
+      ])) as UserRow[]
     );
     return rows[0];
   } catch (e: any) {
@@ -298,24 +352,53 @@ export async function updateUser(id: number, input: UpdateUserInput): Promise<Us
   // 动态拼 SET：只 SET 传入的字段（undefined 不动，null/"" 会覆盖）
   const sets: string[] = [];
   const params: unknown[] = [];
-  if (input.username !== undefined) { sets.push("username = ?"); params.push(input.username); }
-  if (input.nickname !== undefined) { sets.push("nickname = ?"); params.push(input.nickname ?? null); }
-  if (hashedPw != null) { sets.push("password = ?"); params.push(hashedPw); }
-  if (input.object_id !== undefined && objectIdChanging) { sets.push("object_id = ?"); params.push(newObjectId!); }
-  if (input.flag !== undefined) { sets.push("flag = ?"); params.push(safeFlag!); }
-  if (input.email !== undefined) { sets.push("email = ?"); params.push(input.email ?? null); }
-  if (input.phone !== undefined) { sets.push("phone = ?"); params.push(input.phone ?? null); }
-  if (input.avatar !== undefined) { sets.push("avatar = ?"); params.push(input.avatar ?? null); }
-  if (input.permissions !== undefined) { sets.push("permissions = ?"); params.push(input.permissions ?? null); }
-  if (input.extended !== undefined) { sets.push("extended = ?"); params.push(input.extended ?? null); }
+  if (input.username !== undefined) {
+    sets.push("username = ?");
+    params.push(input.username);
+  }
+  if (input.nickname !== undefined) {
+    sets.push("nickname = ?");
+    params.push(input.nickname ?? null);
+  }
+  if (hashedPw != null) {
+    sets.push("password = ?");
+    params.push(hashedPw);
+  }
+  if (input.object_id !== undefined && objectIdChanging) {
+    sets.push("object_id = ?");
+    params.push(newObjectId!);
+  }
+  if (input.flag !== undefined) {
+    sets.push("flag = ?");
+    params.push(safeFlag!);
+  }
+  if (input.email !== undefined) {
+    sets.push("email = ?");
+    params.push(input.email ?? null);
+  }
+  if (input.phone !== undefined) {
+    sets.push("phone = ?");
+    params.push(input.phone ?? null);
+  }
+  if (input.avatar !== undefined) {
+    sets.push("avatar = ?");
+    params.push(input.avatar ?? null);
+  }
+  if (input.permissions !== undefined) {
+    sets.push("permissions = ?");
+    params.push(input.permissions ?? null);
+  }
+  if (input.extended !== undefined) {
+    sets.push("extended = ?");
+    params.push(input.extended ?? null);
+  }
 
   if (sets.length === 0) {
     // 没有任何字段变更 — 直接返回当前记录
-    const rows = attachRoles(
-      (await db.query<UserRow>(
-        `SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`,
-        [id]
-      )) as UserRow[]
+    const rows = await attachRoles(
+      (await db.query<UserRow>(`SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`, [
+        id
+      ])) as UserRow[]
     );
     return rows[0];
   }
@@ -330,11 +413,10 @@ export async function updateUser(id: number, input: UpdateUserInput): Promise<Us
   }
 
   // 返回完整记录（不含 password）+ 挂 roles
-  const rows = attachRoles(
-    (await db.query<UserRow>(
-      `SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`,
-      [id]
-    )) as UserRow[]
+  const rows = await attachRoles(
+    (await db.query<UserRow>(`SELECT ${USER_SELECT_COLS} FROM users WHERE id = ? LIMIT 1`, [
+      id
+    ])) as UserRow[]
   );
   return rows[0];
 }
@@ -366,9 +448,7 @@ export interface BatchUpdateResult {
  * - flag: 可选，改则校验 + bump TV
  * - password: 可选，非空才 bcrypt hash + bump TV
  */
-export async function batchUpdateUsers(
-  input: BatchUpdateUsersInput
-): Promise<BatchUpdateResult> {
+export async function batchUpdateUsers(input: BatchUpdateUsersInput): Promise<BatchUpdateResult> {
   const db = getDs(DS_NAME);
 
   if (!input.userIds || input.userIds.length === 0) {
@@ -398,9 +478,7 @@ export async function batchUpdateUsers(
   }
 
   // 密码 hash（跟 createUser / updateUser 用同一个 hashPassword）
-  const hashedPw = passwordChanging
-    ? await hashPassword(input.password!)
-    : null;
+  const hashedPw = passwordChanging ? await hashPassword(input.password!) : null;
 
   const safeFlag = flagChanging ? assertValidFlag(input.flag!) : null;
 

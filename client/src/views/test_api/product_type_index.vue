@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onMounted, provide, ref } from "vue";
-import { Edit, Search, Refresh, CirclePlus, Delete } from "@element-plus/icons-vue";
+import { defineAsyncComponent, onMounted, provide, ref, reactive } from "vue";
+import {
+  Edit,
+  Search,
+  Refresh,
+  CirclePlus,
+  Delete
+} from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
 import { FooseListParams } from "@/api/foose_db";
 import { ElMessage } from "element-plus";
 import { ProductTypeRow, useProductType } from "@/api/demo/product_type_api";
-const { productTypeDbDataList,
-  productTypeDbLoading, productTypeDbError,
-  productTypeDbTotal, productTypeDbList,
-  productTypeDbPage, productTypeDbPageSize,
-  productTypeDbCreate, productTypeDbRemove,
-  productTypeDbUpdate
-} = useProductType();
+
+const productType = reactive(useProductType());
+
 const editProductType = defineAsyncComponent(async () => {
   return import("@/views/test_api/edit_type.vue");
 });
@@ -49,20 +51,20 @@ const loadPageList = async () => {
 
   // —— 构建查询参数（Directus 风格 filter）——
   const params: FooseListParams = {
-    showSql: true,//是否显示SQL语句
+    showSql: true, //是否显示SQL语句
     page: defautPageIndex.value,
     pageSize: defaultPageSize.value,
     //noPage: true,
     // 排序
     orderBy: "id:desc",
-    filter: filter,
+    filter: filter
   };
 
   try {
-    const res = await productTypeDbList(params);
+    const res = await productType.getPageList(params);
     //console.log(res);
     //console.log(res.sql, res.sqlParams);
-    //console.log(productDbPage.value, productDbPageSize.value, productDbTotal.value);
+    //console.log(productType.page, productType.pageSize, productType.total);
   } catch (e) {
     console.error("加载失败:", e instanceof Error ? e.message : e);
   }
@@ -102,9 +104,9 @@ async function handleEditTypeClose(reload: boolean) {
 async function handleAdd() {
   const newRow: any = {
     type_name: "新产品类型",
-    flag: 0,
+    flag: 0
   };
-  const res = await productTypeDbCreate(newRow);
+  const res = await productType.create(newRow);
   if (!res) {
     ElMessage.error("添加失败");
     return;
@@ -116,7 +118,7 @@ async function handleAdd() {
 /** 删除 */
 // async function handleRemove(rowId: number) {
 //   //console.log("删除", rowId);
-//   const { ok, deleted } = await productTypeDbRemove(rowId);
+//   const { ok, deleted } = await productType.remove(rowId);
 //   if (!ok) {
 //     ElMessage.error("删除失败");
 //     return;
@@ -136,7 +138,9 @@ async function handleFlag(rowId: number, flag: number) {
     return;
   }
   const newFlag = flag === 0 ? 1 : 0;
-  const row: ProductTypeRow = await productTypeDbUpdate(rowId, { flag: newFlag });
+  const row: ProductTypeRow = await productType.update(rowId, {
+    flag: newFlag
+  });
   if (!row) {
     ElMessage.error("状态切换失败");
     return;
@@ -144,7 +148,6 @@ async function handleFlag(rowId: number, flag: number) {
   debounceLoadList();
   ElMessage.success(`状态切换成功`);
 }
-
 </script>
 <template>
   <div>
@@ -152,23 +155,43 @@ async function handleFlag(rowId: number, flag: number) {
       <div class="left">
         <el-row :gutter="8">
           <el-col :span="24">
-            <el-input v-model="queryProductName" placeholder="产品名称" clearable @keyup.enter="debounceLoadList"
-              @clear="debounceLoadList" />
+            <el-input
+              v-model="queryProductName"
+              placeholder="产品名称"
+              clearable
+              @keyup.enter="debounceLoadList"
+              @clear="debounceLoadList"
+            />
           </el-col>
         </el-row>
       </div>
       <div class="right">
-        <el-button type="primary" :loading="productTypeDbLoading" :icon="Search"
-          @click="debounceLoadList">查询</el-button>
-        <el-button :icon="Refresh" type="info" @click="handleResetQuery">重置</el-button>
-        <el-button :icon="CirclePlus" type="success" @click="handleAdd">添加</el-button>
+        <el-button
+          type="primary"
+          :loading="productType.loading"
+          :icon="Search"
+          @click="debounceLoadList"
+          >查询</el-button
+        >
+        <el-button :icon="Refresh" type="info" @click="handleResetQuery"
+          >重置</el-button
+        >
+        <el-button :icon="CirclePlus" type="success" @click="handleAdd"
+          >添加</el-button
+        >
 
-        <el-text v-if="productTypeDbError" class="mx-1" type="danger">
-          {{ productTypeDbError }}
+        <el-text v-if="productType.errorInfo" class="mx-1" type="danger">
+          {{ productType.errorInfo }}
         </el-text>
       </div>
     </div>
-    <el-table :data="productTypeDbDataList" row-key="id" stripe border style="width: 100%">
+    <el-table
+      :data="productType.listResult"
+      row-key="id"
+      stripe
+      border
+      style="width: 100%"
+    >
       <el-table-column prop="id" label="ID" width="100" align="center">
         <template #default="scope">
           <el-text class="mx-1" type="info" size="small">
@@ -193,29 +216,52 @@ async function handleFlag(rowId: number, flag: number) {
       </el-table-column>
       <el-table-column fixed="right" label="操作" width="200" align="center">
         <template #default="scope">
-          <el-button type="primary" :icon="Edit" @click="handleEdit(scope.row.id)">
+          <el-button
+            type="primary"
+            :icon="Edit"
+            @click="handleEdit(scope.row.id)"
+          >
             编辑
           </el-button>
-          <el-button :type="scope.row.flag === 1 ? 'success' : 'danger'" :icon="Delete"
-            @click="handleFlag(scope.row.id, scope.row.flag)">
+          <el-button
+            :type="scope.row.flag === 1 ? 'success' : 'danger'"
+            :icon="Delete"
+            @click="handleFlag(scope.row.id, scope.row.flag)"
+          >
             {{ scope.row.flag === 0 ? "禁用" : "启用" }}
           </el-button>
         </template>
       </el-table-column>
     </el-table>
     <div class="mt-3 pagination-container">
-      <el-pagination v-model:current-page="defautPageIndex" v-model:page-size="defaultPageSize" size="default"
-        :page-sizes="[5, 10, 20, 50, 100]" layout="total, sizes, prev, pager, next, jumper" :total="productTypeDbTotal"
-        @size-change="handleSizeChange" @current-change="handleCurrentChange" />
+      <el-pagination
+        v-model:current-page="defautPageIndex"
+        v-model:page-size="defaultPageSize"
+        size="default"
+        :page-sizes="[5, 10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="productType.total"
+        @size-change="handleSizeChange"
+        @current-change="handleCurrentChange"
+      />
     </div>
     <!-- 编辑弹窗 -->
-    <el-dialog v-model="dialogEditVisible" :title="currentId > 0 ? '编辑产品' : '添加产品'" align-center width="70vw"
-      destroy-on-close draggable :modal="true" :close-on-click-modal="false" :close-on-press-escape="false">
+    <el-dialog
+      v-model="dialogEditVisible"
+      :title="currentId > 0 ? '编辑产品' : '添加产品'"
+      align-center
+      width="70vw"
+      destroy-on-close
+      draggable
+      :modal="true"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+    >
       <edit-product-type :id="currentId" />
     </el-dialog>
   </div>
 </template>
-<style lang='scss' scoped>
+<style lang="scss" scoped>
 .flex_row {
   display: flex;
   width: 100%;

@@ -71,7 +71,7 @@ if (fs.existsSync(embeddedPublic)) {
   console.log("static page (fallback src/public):", pureAdmin);
 }
 
-const app = fastify({ logger: true });
+const app = fastify({ logger: false });
 // 加入 admin-vue 的静态资源,用于后台管理
 app.register(fastifyStatic, {
   root: pureAdmin,

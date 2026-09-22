@@ -29,10 +29,10 @@ import { BusinessError } from "../../utils/errors.js";
 
 const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // —— 通用：取 auth + 指纹校验 ——
-  function guard(request: { authContext?: { bearerToken?: string; fingerprint?: string } }) {
+  async function guard(request: { authContext?: { bearerToken?: string; fingerprint?: string } }) {
     const token = request.authContext?.bearerToken;
     const fp = request.authContext?.fingerprint ?? "";
-    return requireAdminPanel({ token, fingerprint: fp });
+    await requireAdminPanel({ token, fingerprint: fp });
   }
 
   /** 校验表名：正则 + sqlite_master 元数据双重检查 */
@@ -52,7 +52,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // ========== GET /api/admin/db/tables ==========
   fastify.get("/api/admin/db/tables", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const tables = getDb()
         .prepare(
           `SELECT t.name,
@@ -82,7 +82,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/admin/db/table/:name",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const table = validateTable(request.params.name);
         const limit = Math.min(Math.max(Number(request.query.limit ?? 50) || 50, 1), 5000);
         const offset = Math.max(Number(request.query.offset ?? 0) || 0, 0);
@@ -102,7 +102,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/admin/db/query",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { sql, params } = request.body;
         if (!sql || typeof sql !== "string") throw new BusinessError(400, "sql 必须为非空字符串");
 
@@ -150,7 +150,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/admin/db/insert",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { table, data } = request.body;
         const tbl = validateTable(table);
         if (!data || typeof data !== "object") throw new BusinessError(400, "data 必须为对象");
@@ -180,7 +180,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     Body: { table: string; data: Record<string, unknown>; where?: string; whereParams?: unknown[] };
   }>("/api/admin/db/update", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const { table, data, where, whereParams } = request.body;
       const tbl = validateTable(table);
       if (!data || typeof data !== "object") throw new BusinessError(400, "data 必须为对象");
@@ -209,7 +209,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/admin/db/delete",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { table, where, whereParams } = request.body;
         const tbl = validateTable(table);
         if (!where || typeof where !== "string") {
@@ -229,7 +229,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // ========== POST /api/admin/db/refresh-tokens/cleanup ==========
   fastify.post("/api/admin/db/refresh-tokens/cleanup", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const removed = purgeExpiredRefreshTokens();
       return { ok: true, removed };
     } catch (e) {
@@ -241,7 +241,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // ========== POST /api/admin/db/checkpoint ==========
   fastify.post("/api/admin/db/checkpoint", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       // TRUNCATE 模式：checkpoint 后直接清空 WAL 文件
       const result = getDb().pragma("wal_checkpoint(TRUNCATE)") as {
         busy: number;
@@ -258,7 +258,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // ========== GET /api/admin/db/meta ==========
   fastify.get("/api/admin/db/meta", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const db = getDb();
       const tables = (
         db

@@ -1,89 +1,93 @@
 /**
- * FoosDB 通用客户端 SDK —— 完全独立、零耦合
+ * FoosDB 通用客户端 SDK —— 完全独立、零业务耦合
  * ===================================================================
  *
- * 设计目标：
- *   1. **不依赖任何 admin-vue 内部模块**（不 import fastify.ts / http/index.ts / auth.ts）
- *      自己管 axios、登录、token 存储、refresh 轮换、错误解析
- *   2. **强制初始化登录**：createFooseClient 必须提供 username + password
- *      每次初始化从干净状态开始（清自己的 localStorage 缓存），强制 POST /api/auth/login
- *   3. **三种 API 层级**：createFooseClient 工厂 → FooseClient.foose* 方法 → Vue 3 useFoose 组合式
- *   4. **可抽离成独立 npm 包**：业务前端直接 install 一个 @foosdb/sdk 就能用
+ * ✅ 独立成 npm 包：整个文件只依赖 axios + Vue 3（ref），
+ *    不 import 任何业务模块（如 demo/foose_base、admin-vue 内部路由等）。
  *
- * 用法（Vue 3 业务前端）：
+ * 四层 API（从底层到业务层）：
+ * ────────────────────────────────────────────────────────────────────
  *
- *   import { createFooseClient, useFoose } from "@/api/foose_db";
+ *   Layer 1  createFooseClient(options)  ← SDK 提供
+ *   │         初始化 axios + 强制登录 + token 自动 refresh
+ *   │         返回 FooseClient 实例
+ *   │
+ *   Layer 2  foose.fooseList/Get/Create/Update/Remove  ← FooseClient 实例方法
+ *   │         低级 HTTP 调用，非 Vue 上下文可用（router guard / store）
+ *   │
+ *   Layer 3  useFoose<T>(foose, object, table)  ← SDK 提供
+ *   │         Vue 组合式，自动维护 data[]/loading/error + unshift/splice/filter 副作用
+ *   │         需外部先持有 FooseClient 实例
+ *   │
+ *   Layer 4  createUseFoose<T>(config, getFoose)  ← SDK 提供
+ *             表级工厂，一行代码生成 useXxx composable
+ *             把 object+table 封进闭包，getFoose 由业务层注入
+ *             （业务 *_api.ts 用的就是这一层）
  *
- *   // —— 必须提供用户名密码（每次初始化强制重新登录，不读旧缓存） ——
- *   const foose = await createFooseClient({
- *     baseURL: "http://api.example.com",
- *     username: "bob",
- *     password: "123456"
- *   });
- *   // 自动 POST /api/auth/login → 缓存 token 到 localStorage["foose::auth"]
- *   // 后续 access_token 过期自动 refresh（并发安全）
+ * 业务层桥接（demo/foose_base.ts，**不属于 SDK**）：
+ * ────────────────────────────────────────────────────────────────────
+ *   // SDK 只提供工具，业务层自己管理客户端单例
+ *   let _instance: FooseClient | null = null;
+ *   export async function importFooseClient(): Promise<FooseClient> {
+ *     if (_instance) return _instance;
+ *     _instance = await createFooseClient({
+ *       baseURL: "http://127.0.0.1:8858",
+ *       username: "demo",
+ *       password: "admin123456"
+ *     });
+ *     return _instance;
+ *   }
  *
- *   // —— 低级函数（非 Vue 上下文：router guard / store / JS util） ——
+ *   // *_api.ts（业务表定义，**不属于 SDK**）
+ *   export const useProduct = createUseFoose<ProductRow>(
+ *     { object: "sqlite_demo", table: "foose_product" },
+ *     importFooseClient   // ← 注入业务层的 getter，SDK 不关心里面怎么实现
+ *   );
+ *
+ * 四种用法速查：
+ * ────────────────────────────────────────────────────────────────────
+ *
+ *   // A. 纯函数上下文（router guard / store）
+ *   const foose = await createFooseClient({ baseURL, username, password });
  *   const page = await foose.fooseList("sqlite_demo", "product", { page: 1 });
- *   // page.data → T[]
- *   // page.meta  → { total, page, pageSize, totalPages }
- *   const row = await foose.fooseGet("sqlite_demo", "product", 42);
- *   await foose.fooseCreate("sqlite_demo", "product", { name: "新商品", price: 99 });
- *   await foose.fooseUpdate("sqlite_demo", "product", 42, { price: 88 });
- *   await foose.fooseRemove("sqlite_demo", "product", 42);
+ *   //   page.data → T[]
+ *   //   page.meta → { total, page, pageSize, totalPages }
  *
- *   // —— Vue 组件里用组合式（自动维护 data[] / loading / error / 自动 unshift/splice/filter） ——
- *   const { fooseList, fooseCreate, fooseUpdate, fooseRemove, data, loading, error, meta }
+ *   // B. Vue 组件内（已持有 foose 实例）
+ *   const { fooseList, fooseCreate, data, loading, error }
  *     = useFoose<Product>(foose, "sqlite_demo", "product");
  *   await fooseList({ page: 1, pageSize: 20 });
- *   // data.value   → Product[]
- *   // meta.value   → { total, page, pageSize, totalPages }
- *   // loading.value → boolean
- *   // error.value  → string | null（错误自动设置，不会抛导致页面崩溃）
+ *   //   data.value   → Product[]（自动被 list/create/update/remove 同步）
+ *   //   loading.value → boolean（请求中自动 true/false）
+ *   //   error.value  → string | null（失败自动 set，不会 throw 崩页面）
  *
- *   // —— 认证控制 ——
- *   const result = await foose.fooseSafeLogin("alice", "wrong");
- *   // result = { ok: false, error: "登录失败 (HTTP 401)：用户名或密码错误" }
- *   // result.ok === true 时，result.data 就是 FooseAuthResponse
+ *   // C. 业务表级 composable（推荐 *_api.ts 里用）
+ *   //   export const useProduct = createUseFoose<ProductRow>(
+ *   //     { object: "sqlite_demo", table: "foose_product" },
+ *   //     importFooseClient
+ *   //   );
+ *   const { listResult, loading, errorInfo, getPageList, create, remove } = useProduct();
+ *   await getPageList({ page: 1 });
+ *   await create({ product_name: "新商品" });
+ *   await remove(42);
+ *
+ *   // D. 认证控制（都在 FooseClient 上）
+ *   await foose.fooseLogin("bob", "wrong");     // throw on fail
+ *   await foose.fooseSafeLogin("alice", "wrong"); // { ok, data?, error? }
  *   await foose.fooseLogout();
- *   foose.fooseIsAuthenticated();  // boolean
- *   foose.fooseGetCurrentUser();   // { id, username, nickname, avatar, email, phone, ... } | null
+ *   foose.fooseIsAuthenticated();   // boolean
+ *   foose.fooseGetCurrentUser();   // { id, username, ... } | null
  *
- * 依赖：
- * - axios（必须，自己管 HTTP）
- * - Vue 3（ref 仅组合式 API 部分用；低级 foose.foose * 函数不依赖）
+ * 依赖：axios（必须）、Vue 3（ref — 仅 Layer 3/4 组合式用；Layer 1/2 纯函数不依赖）
  */
-/* ================================================================
- * 5. 快速用法示例（业务前端 main.ts 或某个 composable 文件里）
- *
- *   // main.ts（只初始化一次）
- *   import { createFooseClient } from "@/api/foose_db";
- *
- *   const foose = await createFooseClient({
- *     baseURL: "http://127.0.0.1:8858",
- *     // 不传 username/password → 匿名访问
- *     // username: "bob",
- *     // password: "123456",
- *   });
- *
- *   // 存到 window 或 Pinia，组件里用
- *   (window as unknown as Record<string, unknown>).foose = foose;
- *
- *   // 某个业务组件
- *   import { useFoose } from "@/api/foose_db";
- *   const foose = (window as unknown as Record<string, unknown>).foose as FooseClient;
- *   const { list, data, loading, error } = useFoose(foose, "sqlite_demo", "product");
- *   await list({ page: 1, pageSize: 50 });
- *
- *   // 纯 JS 上下文（router guard / store）—— 直接用 foose.list()
- *   const page = await foose.list("sqlite_demo", "product", { page: 1 });
- * ================================================================ */
 import Axios, {
   type AxiosError,
   type AxiosResponse,
   type InternalAxiosRequestConfig
 } from "axios";
 import { ref, type Ref } from "vue";
+import { http } from "@/utils/foose_db_http";
+import { v4 as uuidv4 } from "uuid";
 
 /* ================================================================
  * 1. 类型定义
@@ -260,7 +264,14 @@ export type FooseRow<T = Record<string, unknown>> = T & { id: number | string };
 /** create / update 输入（不含 id） */
 export type FoosePatch<T> = Partial<Omit<T, "id">>;
 
-/** 登录/刷新返回的 token 对 */
+/** 角色简要信息（与后端 RoleBrief 对齐） */
+export interface RoleBrief {
+  id: number;
+  role_name: string;
+  flag: number; // 0=启用, 1=禁用
+}
+
+/** 登录/刷新返回的 token 对（后端原始 payload） */
 interface FooseAuthResponse {
   expires: number;
   refresh_expires: number;
@@ -275,7 +286,8 @@ interface FooseAuthResponse {
     extended: string | null;
     avatar: string | null;
     permissions: string | null;
-    roles: string | null;
+    /** RoleBrief[] 对象数组（后端 attachRoles 返回） */
+    roles: RoleBrief[];
     email: string | null;
     phone: string | null;
   };
@@ -617,10 +629,23 @@ export async function createFooseClient(
       loading.value = false;
       const body = res.data as FooseEnvelope<unknown>;
       if (body && typeof body === "object" && !Array.isArray(body)) {
-        // 登录接口等 Fastify 包装：外层只有 {data} 一个 key → 解包拿内层对象
-        if ("data" in body && Object.keys(body).length === 1) return body.data;
-        // 管理端 admin 路由返回 { ok, ... } → 保留完整（业务路径不走这个分支）
-        if ("ok" in body || "total" in body) return body;
+        // 协议信封（Fastify 包装）：外层 { data: {...} } 或 { data: [...] }
+        //   - data 是非 null 对象 → 内层可能是 { access_token, refresh_token, ... }（auth）
+        //     或 { rows, ... }（admin/db query）→ 解包拿内层对象
+        //   - data 是数组 → 纯业务返回 → 不解包
+        // 注意：可能同时有 durationMs / sqlParams 等额外字段（debug 插件注入），
+        // 所以不能再用 Object.keys(body).length === 1 这种脆弱启发式！
+        if (
+          "data" in body &&
+          body.data !== null &&
+          typeof body.data === "object" &&
+          !Array.isArray(body.data)
+        ) {
+          return body.data;
+        }
+        // 管理端 admin 路由返回 { ok, ... } / 通用 CRUD 返回 { data:[], meta:{...} }
+        // 这些业务信封保留完整
+        if ("ok" in body || "total" in body || "meta" in body) return body;
       }
       return body;
     },
@@ -1434,3 +1459,941 @@ export function createUseFooseTable<T extends FooseRow>(
 ) {
   return () => useFoose<T>(foose, object, table);
 }
+
+/* ================================================================
+ * 5. 表级工厂 —— createUseFoose / createFooseApi
+ *
+ * 与上面 useFoose(foose, object, table) 的区别：
+ *   useFoose       — 需要外部持有 FooseClient 实例，适合已初始化的场景
+ *   createUseFoose — 把 object+table+defaultPageSize 封装成闭包，
+ *                    业务层 *_api.ts 里一行就能生成 useProduct()
+ *
+ * SDK 解耦设计：
+ *   getFoose 参数让 SDK 不关心客户端怎么初始化（单例？每次新建？SSR？），
+ *   也不硬编码任何业务层的 object 默认值。业务层通过
+ *   demo/foose_base.ts 的 importFooseClient 注入实际实现。
+ * ================================================================ */
+
+/** 表级工厂配置 */
+export interface FooseTableConfig {
+  /** 后端 object/datasource 名（必填，SDK 层不设默认） */
+  object: string;
+  /**
+   * 后端真实表名 —— 同时用于自动推导 prefix：
+   *   "foose_product"      → 自动推 prefix = "product"
+   *   "foose_product_type" → 自动推 prefix = "productType"
+   *   "users"              → 自动推 prefix = "users"
+   */
+  table: string;
+  /** 默认分页大小（默认 10） */
+  defaultPageSize?: number;
+  /**
+   * key 前缀 —— 覆盖 table 的自动推导结果（默认会自动推导，一般不用传）
+   *   自动推导: table "foose_product_type" → prefix = "productType"
+   *   覆盖传值: prefix = "pt" → ptList, ptLoading, ...
+   */
+  prefix?: string;
+}
+
+/**
+ * 从表名自动推导 prefix（运行时）：
+ *   foose_product_type → productType  （去掉 foose_ 前缀 + _ 驼峰化）
+ *   product_type       → productType
+ *   users              → users
+ *   foose_user_role    → userRole
+ */
+export function derivePrefix(table: string): string {
+  const stripped = table
+    .replace(/^foose_/, "")
+    .replace(/^t_/, "")
+    .replace(/^tbl_/, "");
+  return stripped
+    .split("_")
+    .map((w, i) => (i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join("");
+}
+
+/**
+ * 从表名推导 prefix（类型版）
+ *   DerivePrefixType<"foose_product_type"> → "productType"
+ *   DerivePrefixType<"users">              → "users"
+ */
+export type DerivePrefixType<Table extends string> =
+  Table extends `foose_${infer Rest}`
+    ? DerivePrefixTypeInner<Rest>
+    : Table extends `t_${infer Rest}`
+      ? DerivePrefixTypeInner<Rest>
+      : Table extends `tbl_${infer Rest}`
+        ? DerivePrefixTypeInner<Rest>
+        : DerivePrefixTypeInner<Table>;
+
+type DerivePrefixTypeInner<S extends string> =
+  S extends `${infer First}_${infer Rest}`
+    ? `${First}${Capitalize<DerivePrefixTypeInner<Rest>>}`
+    : S;
+
+/**
+ * 类型层：把 FooseComposable 的原始 key 直接变成干净的语义名
+ *
+ * 特殊映射（与 renameKeys 运行时一致）：
+ *   fooseDbDataList  → listResult
+ *   fooseDbError     → errorInfo
+ *   fooseDbList      → getPageList
+ *   fooseDbGet       → getRow
+ *
+ * 通用规则（strip fooseDb / foose 前缀）：
+ *   fooseDbLoading   → loading
+ *   fooseDbPage      → page
+ *   fooseDbCreate    → create
+ *   fooseCurrentRow  → currentRow（foose 前缀无 Db 所以走 Uncapitalize<CurrentRow> → currentRow）
+ *
+ * 可选 Prefix：同组件多表不冲突时开启
+ *   CleanKey<"fooseDbList", "product"> → "productGetPageList"
+ */
+type CleanKey<
+  K extends string,
+  Prefix extends string = ""
+> = K extends "fooseDbDataList"
+  ? `${Prefix}listResult`
+  : K extends "fooseDbError"
+    ? `${Prefix}errorInfo`
+    : K extends "fooseDbList"
+      ? `${Prefix}getPageList`
+      : K extends "fooseDbGet"
+        ? `${Prefix}getRow`
+        : K extends `fooseDb${infer Rest}`
+          ? `${Prefix}${Uncapitalize<Rest>}`
+          : K extends `foose${infer Rest}`
+            ? `${Prefix}${Uncapitalize<Rest>}`
+            : `${Prefix}${K}`;
+
+/** 干净 key 的 Composable — 默认 Prefix=""，key 就是 listResult/errorInfo/getPageList/getRow/loading/page/create/... */
+export type CleanComposable<T extends FooseRow, Prefix extends string = ""> = {
+  [
+    K in keyof FooseComposable<T> as CleanKey<Extract<K, string>, Prefix>
+  ]: FooseComposable<T>[K];
+};
+
+/**
+ * 强制 TypeScript 把泛型别名 / MappedType 展开成具体结构。
+ */
+export type Expand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never;
+
+/** 内部：懒加载 foose 单例 + 错误处理 */
+function makeFooseGetter(
+  getFoose: () => Promise<FooseClient>,
+  errorRef: Ref<string | null>
+) {
+  let promise: Promise<FooseClient> | null = null;
+  return function (): Promise<FooseClient> {
+    if (!promise) {
+      promise = getFoose().catch(err => {
+        errorRef.value = err instanceof Error ? err.message : "FoosDB 连接失败";
+        throw err;
+      });
+    }
+    return promise;
+  };
+}
+
+/**
+ * 特殊 key 映射表（SDK 内部名 → 对外规范名）：
+ *   fooseDbDataList  → listResult    列表结果（Ref<T[]>）
+ *   fooseDbError     → errorInfo     错误信息（Ref<string | null>）
+ *   fooseDbList      → getPageList   分页列表（方法）
+ *   fooseDbGet       → getRow        按 ID 取单条（方法）
+ */
+const SPECIAL_KEY_MAP: Record<string, string> = {
+  fooseDbDataList: "listResult",
+  fooseDbError: "errorInfo",
+  fooseDbList: "getPageList",
+  fooseDbGet: "getRow"
+};
+
+/**
+ * 把 composable 的原始 key 重命名为干净的语义名：
+ *   fooseDbDataList         → listResult   （特殊映射）
+ *   fooseDbError            → errorInfo    （特殊映射）
+ *   fooseDbList             → getPageList  （特殊映射）
+ *   fooseDbGet              → getRow       （特殊映射）
+ *   fooseDbLoading          → loading
+ *   fooseDbPage             → page
+ *   fooseDbPageSize         → pageSize
+ *   fooseDbTotal            → total
+ *   fooseCurrentRow         → currentRow   （无 Db 前缀，不走 strip）
+ *   fooseDbCreate           → create
+ *   fooseDbCreates          → creates
+ *   fooseDbUpdate           → update
+ *   fooseDbUpdates          → updates
+ *   fooseDbRemove           → remove
+ *   fooseDbRemoves          → removes
+ *   fooseDbRemovesByFilter  → removesByFilter
+ *   fooseDbReset            → reset
+ *
+ * 可选 prefix 参数（同组件多表不冲突时开启）：
+ *   renameKeys(obj, "product") → productListResult, productLoading, ...
+ */
+function renameKeys(
+  obj: Record<string, unknown>,
+  prefix: string = ""
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    // 1. 先试特殊映射表
+    if (SPECIAL_KEY_MAP[k]) {
+      out[prefix + SPECIAL_KEY_MAP[k]] = v;
+      continue;
+    }
+    // 2. 通用：fooseDbXxx → xxx，fooseXxx → xxx
+    let key = k.startsWith("foose") ? k.slice(5) : k;
+    if (key.startsWith("Db")) key = key.slice(2);
+    out[prefix + key.charAt(0).toLowerCase() + key.slice(1)] = v;
+  }
+  return out;
+}
+
+/**
+ * 创建响应式 composable（useProduct / useProductType ...）
+ *
+ *   import { createUseFoose } from "@/api/foose_db";
+ *   import { importFooseClient } from "@/api/demo/foose_base";
+ *
+ *   export const useProduct = createUseFoose<ProductRow>(
+ *     { object: "sqlite_demo", table: "foose_product", defaultPageSize: 10 },
+ *     importFooseClient   // ← 业务层注入 FooseClient getter
+ *   );
+ *
+ *   // 组件里：
+ *   const { listResult, loading, errorInfo, getPageList, create, remove } = useProduct();
+ */
+export function createUseFoose<T extends FooseRow, Prefix extends string = "">(
+  config: FooseTableConfig,
+  getFoose: () => Promise<FooseClient>
+): () => CleanComposable<T, Prefix> {
+  const OBJECT = config.object;
+  const TABLE = config.table;
+  const DEFAULT_PAGE_SIZE = config.defaultPageSize ?? 10;
+  const prefix: string = config.prefix ?? "";
+
+  return function useFooseTable(): CleanComposable<T, Prefix> {
+    // —— 响应式状态（必须在 setup 顶层同步创建）——
+    const data: Ref<T[]> = ref([]);
+    const current: Ref<T | null> = ref(null);
+    const loading = ref(false);
+    const error: Ref<string | null> = ref(null);
+    const page = ref(1);
+    const pageSize = ref(DEFAULT_PAGE_SIZE);
+    const total = ref(0);
+
+    const getClient = makeFooseGetter(getFoose, error);
+
+    async function fooseList(params?: FooseListParams) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const res = await foose.fooseList<T>(OBJECT, TABLE, params);
+        data.value = (res?.data ?? []) as T[];
+        page.value = res?.meta?.page ?? 1;
+        pageSize.value = res?.meta?.pageSize ?? DEFAULT_PAGE_SIZE;
+        total.value = res?.meta?.total ?? data.value.length;
+        return res;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseGet(
+      id: number | string,
+      fields?: string,
+      join?: string
+    ) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const row = await foose.fooseGet<T>(OBJECT, TABLE, id, {
+          fields,
+          join
+        });
+        current.value = row;
+        return row;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseGetBy(params: FooseListParams) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const row = await foose.fooseGetBy<T>(OBJECT, TABLE, params);
+        current.value = row;
+        return row;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseCreate(payload: FoosePatch<T>) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const row = await foose.fooseCreate<T>(OBJECT, TABLE, payload);
+        current.value = row;
+        data.value.unshift(row);
+        total.value += 1;
+        return row;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseUpdate(id: number | string, payload: FoosePatch<T>) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const row = await foose.fooseUpdate<T>(OBJECT, TABLE, id, payload);
+        current.value = row;
+        const idx = data.value.findIndex(r => {
+          const rk =
+            (r as Record<string, unknown>).id ??
+            (r as Record<string, unknown>).my_id;
+          return rk === id;
+        });
+        if (idx !== -1) data.value.splice(idx, 1, row);
+        return row;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseCreates(payloads: FoosePatch<T>[], showSql = false) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const res = await foose.fooseCreates<T>(
+          OBJECT,
+          TABLE,
+          payloads,
+          showSql
+        );
+        for (const row of res.rows) {
+          data.value.unshift(row);
+        }
+        total.value += res.created;
+        return res;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseUpdates(
+      rows: Array<{ id: number | string } & FoosePatch<T>>,
+      showSql = false
+    ) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const res = await foose.fooseUpdates<T>(OBJECT, TABLE, rows, showSql);
+        for (const newRow of res.rows) {
+          const r = newRow as Record<string, unknown>;
+          const id = r.id ?? r.my_id;
+          if (id !== undefined) {
+            const idx = data.value.findIndex(
+              d =>
+                (d as Record<string, unknown>).id === id ||
+                (d as Record<string, unknown>).my_id === id
+            );
+            if (idx !== -1) data.value.splice(idx, 1, newRow);
+          }
+        }
+        return res;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseRemove(id: number | string) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const res = await foose.fooseRemove(OBJECT, TABLE, id);
+        data.value = data.value.filter(r => {
+          const rk =
+            (r as Record<string, unknown>).id ??
+            (r as Record<string, unknown>).my_id;
+          return rk !== id;
+        });
+        if (current.value) {
+          const ck =
+            (current.value as Record<string, unknown>).id ??
+            (current.value as Record<string, unknown>).my_id;
+          if (ck === id) current.value = null;
+        }
+        total.value = Math.max(0, total.value - 1);
+        return res;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseRemoves(ids: Array<number | string>, showSql = false) {
+      loading.value = true;
+      error.value = null;
+      try {
+        const foose = await getClient();
+        const res = await foose.fooseRemoves(OBJECT, TABLE, ids, showSql);
+        const idSet = new Set(ids);
+        data.value = data.value.filter(r => {
+          const rk =
+            (r as Record<string, unknown>).id ??
+            (r as Record<string, unknown>).my_id;
+          return !idSet.has(rk as number | string);
+        });
+        if (current.value) {
+          const ck =
+            (current.value as Record<string, unknown>).id ??
+            (current.value as Record<string, unknown>).my_id;
+          if (idSet.has(ck as number | string)) current.value = null;
+        }
+        total.value = Math.max(0, total.value - (res?.deleted ?? ids.length));
+        return res;
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function fooseRemovesByFilter(
+      filter: Record<string, unknown>,
+      showSql = false
+    ) {
+      error.value = null;
+      try {
+        const foose = await getClient();
+        return foose.fooseRemoveByFilter(OBJECT, TABLE, filter, showSql);
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : "未知错误";
+        throw e;
+      }
+    }
+
+    function fooseReset() {
+      data.value = [];
+      current.value = null;
+      error.value = null;
+      page.value = 1;
+      pageSize.value = DEFAULT_PAGE_SIZE;
+      total.value = 0;
+    }
+
+    const raw: FooseComposable<T> = {
+      fooseDbDataList: data,
+      fooseCurrentRow: current,
+      fooseDbLoading: loading,
+      fooseDbError: error,
+      fooseDbPage: page,
+      fooseDbPageSize: pageSize,
+      fooseDbTotal: total,
+      fooseDbList: fooseList,
+      fooseDbGet: fooseGet,
+      fooseDbGetBy: fooseGetBy,
+      fooseDbCreate: fooseCreate,
+      fooseDbCreates: fooseCreates,
+      fooseDbUpdate: fooseUpdate,
+      fooseDbUpdates: fooseUpdates,
+      fooseDbRemove: fooseRemove,
+      fooseDbRemoves: fooseRemoves,
+      fooseDbRemovesByFilter: fooseRemovesByFilter,
+      fooseDbReset: fooseReset
+    };
+
+    const result = renameKeys(
+      raw as unknown as Record<string, unknown>,
+      prefix
+    );
+    return result as CleanComposable<T, Prefix>;
+  };
+}
+
+/* ==================== 纯函数 API ==================== */
+
+/** 纯函数 API 接口 — 不走响应式状态，用于 store / router guard / 工具函数 */
+export interface FooseApi<T extends FooseRow> {
+  list: (params?: FooseListParams) => Promise<FoosePage<T>>;
+  get: (id: number | string, fields?: string, join?: string) => Promise<T>;
+  getBy: (params: FooseListParams) => Promise<T | null>;
+  create: (payload: FoosePatch<T>) => Promise<T>;
+  creates: (
+    rows: FoosePatch<T>[],
+    showSql?: boolean
+  ) => Promise<{
+    ok: boolean;
+    created: number;
+    rows: T[];
+    sql?: string;
+    sqlParams?: unknown[];
+  }>;
+  update: (id: number | string, payload: FoosePatch<T>) => Promise<T>;
+  updates: (
+    rows: Array<{ id: number | string } & FoosePatch<T>>,
+    showSql?: boolean
+  ) => Promise<{
+    ok: boolean;
+    updated: number;
+    rows: T[];
+    sql?: string;
+    sqlParams?: unknown[];
+  }>;
+  remove: (id: number | string) => Promise<{ ok: boolean; deleted: number }>;
+  removes: (
+    ids: Array<string | number>,
+    showSql?: boolean
+  ) => Promise<{
+    ok: boolean;
+    deleted: number;
+    sql?: string;
+    sqlParams?: unknown[];
+  }>;
+  removeByFilter: (
+    filter: Record<string, unknown>,
+    showSql?: boolean
+  ) => Promise<{
+    ok: boolean;
+    deleted: number;
+    sql?: string;
+    sqlParams?: unknown[];
+  }>;
+}
+
+/**
+ * 创建纯函数 API（store / router guard / 工具函数里用）
+ *
+ * 与 createUseFoose 的区别：
+ *   createUseFoose → 返回带 loading/error/dataList 响应式状态的 composable
+ *   createFooseApi → 返回 10 个纯函数，无状态，每次调用都是独立请求
+ *
+ * 注：getFoose 由业务层注入（一般是 importFooseClient）。
+ */
+export function createFooseApi<T extends FooseRow>(
+  config: FooseTableConfig,
+  getFoose: () => Promise<FooseClient>
+): FooseApi<T> {
+  const OBJECT = config.object;
+  const TABLE = config.table;
+
+  async function list(params?: FooseListParams) {
+    const foose = await getFoose();
+    return foose.fooseList<T>(OBJECT, TABLE, params);
+  }
+  async function get(id: number | string, fields?: string, join?: string) {
+    const foose = await getFoose();
+    return foose.fooseGet<T>(OBJECT, TABLE, id, { fields, join });
+  }
+  async function getBy(params: FooseListParams) {
+    const foose = await getFoose();
+    return foose.fooseGetBy<T>(OBJECT, TABLE, params);
+  }
+  async function create(payload: FoosePatch<T>) {
+    const foose = await getFoose();
+    return foose.fooseCreate<T>(OBJECT, TABLE, payload);
+  }
+  async function creates(rows: FoosePatch<T>[], showSql = false) {
+    const foose = await getFoose();
+    return foose.fooseCreates<T>(OBJECT, TABLE, rows, showSql);
+  }
+  async function update(id: number | string, payload: FoosePatch<T>) {
+    const foose = await getFoose();
+    return foose.fooseUpdate<T>(OBJECT, TABLE, id, payload);
+  }
+  async function updates(
+    rows: Array<{ id: number | string } & FoosePatch<T>>,
+    showSql = false
+  ) {
+    const foose = await getFoose();
+    return foose.fooseUpdates<T>(OBJECT, TABLE, rows, showSql);
+  }
+  async function remove(id: number | string) {
+    const foose = await getFoose();
+    return foose.fooseRemove(OBJECT, TABLE, id);
+  }
+  async function removes(ids: Array<string | number>, showSql = false) {
+    const foose = await getFoose();
+    return foose.fooseRemoves(OBJECT, TABLE, ids, showSql);
+  }
+  async function removeByFilter(
+    filter: Record<string, unknown>,
+    showSql = false
+  ) {
+    const foose = await getFoose();
+    return foose.fooseRemoveByFilter(OBJECT, TABLE, filter, showSql);
+  }
+
+  return {
+    list,
+    get,
+    getBy,
+    create,
+    creates,
+    update,
+    updates,
+    remove,
+    removes,
+    removeByFilter
+  };
+}
+
+/* ================================================================
+ * Layer 5 · pure-admin 适配层（FooseDB → pure-admin store）
+ * =================================================================
+ * getLogin / refreshTokenApi / getMine / getMineLogs
+ * 独立文件原本是 foose_db_user.ts，2026-09-22 合并进 foose_db.ts
+ * （唯一消费方 store/modules/user.ts 的 import 路径同步改为本文件）
+ * ================================================================ */
+
+export type UserResult = {
+  code: number;
+  message: string;
+  data: {
+    /** 头像 */
+    avatar: string;
+    /** 用户名 */
+    username: string;
+    /** 昵称 */
+    nickname: string;
+    /** 当前登录用户的角色 */
+    roles: Array<string>;
+    /** 按钮级别权限 */
+    permissions: Array<string>;
+    /** `token` */
+    accessToken: string;
+    /** 用于调用刷新`accessToken`的接口时所需的`token` */
+    refreshToken: string;
+    /** `accessToken`的过期时间（ISO 字符串） */
+    expires: string;
+    /** accessToken 过期时间（ISO 字符串，供 pure-admin setToken 使用） */
+    refreshExpires?: string;
+    /** admin-panel 识别标识（可选，admin 面板 JWT 带 scope） */
+    scope?: string;
+    /** JWT payload 中的 object_id（-1=admin，≥1=绑定项目） */
+    objectId?: number;
+    /** 用户ID */
+    userId?: number;
+    /** 扩展信息 */
+    extended?: string;
+    /** 邮箱 */
+    email?: string;
+    /** 联系电话 */
+    phone?: string;
+  };
+};
+
+export type RefreshTokenResult = {
+  code: number;
+  message: string;
+  data: {
+    /** `token` */
+    accessToken: string;
+    /** 用于调用刷新`accessToken`的接口时所需的`token` */
+    refreshToken: string;
+    /** `accessToken`的过期时间（ISO 字符串） */
+    expires: string;
+  };
+};
+
+export type UserInfo = {
+  /** 头像 */
+  avatar: string;
+  /** 用户名 */
+  username: string;
+  /** 昵称 */
+  nickname: string;
+  /** 邮箱 */
+  email: string;
+  /** 联系电话 */
+  phone: string;
+  /** 简介 */
+  description: string;
+  /** 用户ID */
+  id: number;
+  /** 扩展信息 */
+  extended: string;
+  /** 按钮级别权限 */
+  permissions: Array<string>;
+  /** 角色 */
+  roles: Array<string>;
+};
+
+export type UserInfoResult = {
+  code: number;
+  message: string;
+  data: UserInfo;
+};
+
+type ResultTable = {
+  code: number;
+  message: string;
+  data?: {
+    /** 列表数据 */
+    list: Array<any>;
+    /** 总条目数 */
+    total?: number;
+    /** 每页显示条目个数 */
+    pageSize?: number;
+    /** 当前页数 */
+    currentPage?: number;
+  };
+};
+
+/** 解码 JWT payload（base64url 解码，纯函数） */
+function decodeJwtPayload(token: string): any {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "="
+    );
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 登录（对接 FoosDB /api/auth/login）
+ * 后端返回 { data: { access_token, refresh_token, expires, refresh_expires, user } }
+ * 前端适配为 pure-admin store 期望的：{ code: 0, data: { accessToken, expires, ... } }
+ *
+ * roles 处理（2026-09-22）：
+ *   后端 user.roles 返回 RoleBrief[] 对象数组（{id, role_name, flag}），
+ *   admin-panel 分支 scope==="admin-panel" 时前端固定给 ["admin"]，
+ *   否则转 role_name 字符串数组（匹配 UserResult.roles: Array<string>）。
+ */
+export const getLogin = (data: { username: string; password: string }) => {
+  return http
+    .request<{ data: any }>("post", "/api/auth/login", {
+      data: { username: data.username, password: data.password }
+    })
+    .then(raw => {
+      const d = (raw as any).data;
+      if (!d || !d.access_token) {
+        throw new Error("登录响应缺少 access_token");
+      }
+
+      const payload = decodeJwtPayload(d.access_token);
+      const scope: string | undefined = payload?.scope;
+      const objectId: number | undefined = payload?.object_id;
+      const jwtUsername: string = payload?.username ?? data.username;
+      const nickname: string = payload?.nickname ?? jwtUsername;
+
+      const rawRoles = d.user.roles;
+      let roleDetails: Array<{ id: number; role_name: string; flag: number }> =
+        [];
+      let userRoles: Array<string> = [];
+      if (Array.isArray(rawRoles)) {
+        roleDetails = rawRoles
+          .filter((r: any) => typeof r === "object")
+          .map((r: any) => ({
+            id: r.id ?? 0,
+            role_name: r.role_name ?? String(r.id ?? r),
+            flag: Number(r.flag ?? 0)
+          }));
+        userRoles = roleDetails.map(r => r.role_name);
+        if (scope === "admin-panel") {
+          userRoles = ["admin"];
+        }
+      } else if (typeof rawRoles === "string" && rawRoles.length > 0) {
+        userRoles = rawRoles.split(",").filter(Boolean);
+      }
+
+      const user_result = {
+        code: 0,
+        message: "ok",
+        data: {
+          accessToken: d.access_token,
+          refreshToken: d.refresh_token,
+          expires: new Date(d.expires * 1000).toISOString(),
+          refreshExpires: new Date(d.refresh_expires * 1000).toISOString(),
+          avatar: d.user.avatar || "",
+          userId: d.user.id || 0,
+          username: jwtUsername,
+          nickname,
+          extended: d.user.extended || "",
+          email: d.user.email || "",
+          phone: d.user.phone || "",
+          roles: userRoles,
+          permissions:
+            scope === "admin-panel" ? ["*:*:*"] : [d.user.permissions || ""],
+          roleDetails,
+          scope,
+          objectId
+        }
+      } as UserResult & { data: { roleDetails: typeof roleDetails } };
+      return user_result;
+    });
+};
+
+/**
+ * 刷新 token（对接 FoosDB /api/auth/refresh）
+ * 后端请求体 snake_case（refresh_token），pure-admin store 传 camelCase — 这里做转换。
+ */
+export const refreshTokenApi = (data?: { refreshToken?: string }) => {
+  return http
+    .request<{ data: any }>("post", "/api/auth/refresh", {
+      data: { refresh_token: data?.refreshToken }
+    })
+    .then(raw => {
+      const d = (raw as any).data;
+      if (!d || !d.access_token) {
+        throw new Error("刷新响应缺少 access_token");
+      }
+      return {
+        code: 0,
+        message: "ok",
+        data: {
+          accessToken: d.access_token,
+          refreshToken: d.refresh_token,
+          expires: new Date(d.expires * 1000).toISOString()
+        }
+      } as RefreshTokenResult;
+    });
+};
+
+/** 账户设置-个人信息（暂未对接，返回空壳） */
+export const getMine = (_data?: object): Promise<UserInfoResult> => {
+  return Promise.resolve({
+    code: 0,
+    message: "ok",
+    data: {
+      avatar: "",
+      username: "",
+      nickname: "",
+      email: "",
+      phone: "",
+      description: "",
+      id: 0,
+      extended: "",
+      permissions: [],
+      roles: []
+    }
+  });
+};
+
+/** 账户设置-个人安全日志（暂未对接） */
+export const getMineLogs = (_data?: object): Promise<ResultTable> => {
+  return Promise.resolve({
+    code: 0,
+    message: "ok",
+    data: { list: [], total: 0 }
+  });
+};
+
+/* ================================================================
+ * Layer 6 · FooseTools 工具类
+ * ===========================
+ * uuidv4 / clearAllSpace / generatePassword / toNumber|toBoolean|...
+ * 独立文件原本是 foose_db_tools.ts，2026-09-22 合并进 foose_db.ts
+ * ================================================================ */
+
+class FooseTools {
+  /** 字符池，和校验正则保持一致——用于 generatePassword 保底 */
+  static CHAR_POOL = {
+    letters: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    digits: "0123456789",
+    specials: "!@#$%^&*()_+{}[]:;|.<>/?"
+  };
+  /** 生成带 "id" 前缀的 uuidv4（连字符已去掉） */
+  static createUuid(): string {
+    return "id" + uuidv4().replaceAll("-", "");
+  }
+  static toNumber(v: number | string): number {
+    return Number(v);
+  }
+  static toString(v: number | string): string {
+    return String(v);
+  }
+  static toBoolean(v: number | string): boolean {
+    return Boolean(v);
+  }
+  static toDate(v: number | string): Date {
+    return new Date(v);
+  }
+  /** 去掉所有空白字符（含全角空格 \u3000）并 trim */
+  static clearAllSpace(v: string): string {
+    if (!v) return "";
+    return v.replace(/[\s\u3000]+/g, "").trim();
+  }
+  /**
+   * 生成符合密码规则的随机密码
+   * 【保底】每一类（letters/digits/specials）至少 1 个 → 保证校验通过
+   * @param length 密码长度，默认 8；至少 3（保底需要）
+   */
+  static generatePassword(length: number = 8): string {
+    const pwdChars: string[] = [];
+    // 保底位
+    pwdChars.push(this.getRandomChar(this.CHAR_POOL.letters));
+    pwdChars.push(this.getRandomChar(this.CHAR_POOL.digits));
+    pwdChars.push(this.getRandomChar(this.CHAR_POOL.specials));
+
+    // 剩余字符全池随机填充
+    const allChars =
+      this.CHAR_POOL.letters + this.CHAR_POOL.digits + this.CHAR_POOL.specials;
+    const remainCount = Math.max(length - 3, 0);
+    for (let i = 0; i < remainCount; i++) {
+      pwdChars.push(this.getRandomChar(allChars));
+    }
+
+    return this.shuffleArray(pwdChars).join("");
+  }
+  private static getRandomChar(str: string): string {
+    const idx = Math.floor(Math.random() * str.length);
+    return str[idx];
+  }
+  private static shuffleArray<T>(arr: T[]): T[] {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  }
+}
+export { FooseTools };

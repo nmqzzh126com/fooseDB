@@ -15,10 +15,10 @@ import { requireAdminPanel } from "../../services/config.service.js";
 import { BusinessError } from "../../utils/errors.js";
 
 const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
-  function guard(request: { authContext?: { bearerToken?: string; fingerprint?: string } }) {
+  async function guard(request: { authContext?: { bearerToken?: string; fingerprint?: string } }) {
     const token = request.authContext?.bearerToken;
     const fp = request.authContext?.fingerprint ?? "";
-    return requireAdminPanel({ token, fingerprint: fp });
+    await requireAdminPanel({ token, fingerprint: fp });
   }
 
   // ============ roles ============
@@ -26,7 +26,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // GET /api/roles/batch?ids=1,2,3   按主键批量查角色
   fastify.get<{ Querystring: { ids?: string } }>("/api/roles/batch", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const { ids } = request.query;
       if (!ids || !ids.trim()) return reply.code(400).send({ error: "ids 必填" });
       const nums = ids
@@ -49,7 +49,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/roles",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { flag, role_name, mode } = request.query;
         const db = getDb();
         const conditions: string[] = [];
@@ -83,7 +83,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // GET /api/roles/:id   详情
   fastify.get<{ Params: { id: string } }>("/api/roles/:id", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const row = getDb().prepare("SELECT * FROM roles WHERE id = ?").get(Number(request.params.id));
       if (!row) return reply.code(404).send({ error: "角色不存在" });
       return row;
@@ -96,7 +96,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // POST /api/roles   新建
   fastify.post<{ Body: { role_name?: string; flag?: number } }>("/api/roles", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const { role_name = "", flag = 0 } = request.body ?? {};
       const db = getDb();
       const info = db
@@ -114,7 +114,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/roles/:id",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const id = Number(request.params.id);
         const db = getDb();
         const existing = db.prepare("SELECT * FROM roles WHERE id = ?").get(id) as any;
@@ -134,7 +134,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // DELETE /api/roles/:id   删除（同时删 role_user 中的绑定）
   fastify.delete<{ Params: { id: string } }>("/api/roles/:id", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const id = Number(request.params.id);
       const db = getDb();
       const existing = db.prepare("SELECT * FROM roles WHERE id = ?").get(id);
@@ -156,7 +156,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // GET /api/role-users/batch?ids=1,2,3   按主键批量查绑定
   fastify.get<{ Querystring: { ids?: string } }>("/api/role-users/batch", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const { ids } = request.query;
       if (!ids || !ids.trim()) return reply.code(400).send({ error: "ids 必填" });
       const nums = ids
@@ -182,7 +182,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/role-users",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { role_id, user_id } = request.query;
         const db = getDb();
         if (role_id !== undefined && role_id !== "") {
@@ -217,7 +217,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/role-users",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { role_id, user_id } = request.body ?? {};
         if (!role_id || !user_id) return reply.code(400).send({ error: "role_id 和 user_id 必填" });
         const db = getDb();
@@ -244,7 +244,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   // DELETE /api/role-users/:id   解除绑定（按主键）
   fastify.delete<{ Params: { id: string } }>("/api/role-users/:id", async (request, reply) => {
     try {
-      guard(request);
+      await guard(request);
       const id = Number(request.params.id);
       const db = getDb();
       const existing = db.prepare("SELECT * FROM role_user WHERE id = ?").get(id);
@@ -263,7 +263,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/role-users/batch-set",
     async (request, reply) => {
       try {
-        guard(request);
+        await guard(request);
         const { user_id, role_ids } = request.body ?? {};
         if (!user_id) return reply.code(400).send({ error: "user_id 必填" });
         if (!Array.isArray(role_ids)) return reply.code(400).send({ error: "role_ids 必须是数组" });

@@ -34,7 +34,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     "/api/users",
     async function (request, reply) {
       try {
-        requireSystemAdminForManage({
+        await requireSystemAdminForManage({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -65,7 +65,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { params: UserIdParamSchema } },
     async function (request, reply) {
       try {
-        requireSystemAdminForManage({
+        await requireSystemAdminForManage({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -83,7 +83,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { body: CreateUserBodySchema } },
     async function (request, reply) {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -102,7 +102,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { params: UserIdParamSchema, body: UpdateUserBodySchema } },
     async function (request, reply) {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -121,7 +121,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     { schema: { params: UserIdParamSchema } },
     async function (request, reply) {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });
@@ -153,7 +153,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     },
     async function (request, reply) {
       try {
-        requireAdminPanel({
+        await requireAdminPanel({
           token: request.authContext.bearerToken,
           fingerprint: request.authContext.fingerprint
         });

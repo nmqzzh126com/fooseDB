@@ -39,7 +39,8 @@ export function quoteId(name: string, dsType: string): string {
 }
 
 // —— discoverSchema 结果缓存 ——
-const _schemaCache = new Map<string, TableSchema>();
+const _schemaCache = new Map<string, { schema: TableSchema; expireAt: number }>();
+const SCHEMA_CACHE_TTL_MS = 10 * 60 * 1000; // 10 分钟自动过期，避免手动 ALTER TABLE 后缓存脏
 
 /** 构造缓存 key */
 function cacheKey(dsName: string, table: string): string {
@@ -81,7 +82,8 @@ export async function discoverSchema(ds: Datasource, table: string): Promise<Tab
 
   const key = cacheKey(ds.name, table);
   const cached = _schemaCache.get(key);
-  if (cached) return cached;
+  if (cached && cached.expireAt > Date.now()) return cached.schema;
+  _schemaCache.delete(key); // 过期的也删掉
 
   let columns: ColumnInfo[] = [];
 
@@ -115,6 +117,41 @@ export async function discoverSchema(ds: Datasource, table: string): Promise<Tab
       isPrimaryKey: r.Key === "PRI",
       defaultValue: r.Default
     }));
+  } else if (ds.type === "postgres") {
+    // 1) 列基础信息
+    const colRows = await ds.query<{
+      column_name: string;
+      data_type: string;
+      is_nullable: string;
+      column_default: string | null;
+      ordinal_position: number;
+    }>(
+      `SELECT column_name, data_type, is_nullable, column_default, ordinal_position
+         FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = $1
+        ORDER BY ordinal_position`,
+      [table]
+    );
+    // 2) 主键列名
+    const pkRows = await ds.query<{ column_name: string }>(
+      `SELECT kcu.column_name
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON tc.constraint_name = kcu.constraint_name
+          AND tc.table_schema = kcu.table_schema
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_schema = current_schema()
+          AND tc.table_name = $1`,
+      [table]
+    );
+    const pkSet = new Set(pkRows.map(r => r.column_name));
+    columns = colRows.map(r => ({
+      name: r.column_name,
+      type: r.data_type,
+      nullable: r.is_nullable === "YES",
+      isPrimaryKey: pkSet.has(r.column_name),
+      defaultValue: r.column_default
+    }));
   } else {
     throw new Error(`Schema discovery not supported for type(不支持的数据库类型): ${ds.type}`);
   }
@@ -131,6 +168,6 @@ export async function discoverSchema(ds: Datasource, table: string): Promise<Tab
     primaryKey: pkCol?.name ?? "id"
   };
 
-  _schemaCache.set(key, schema);
+  _schemaCache.set(key, { schema, expireAt: Date.now() + SCHEMA_CACHE_TTL_MS });
   return schema;
 }

@@ -44,7 +44,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     // —— admin 鉴权（token + 客户端指纹）
     const fp = request.authContext.fingerprint;
     const token = request.authContext.bearerToken;
-    requireAdminPanel({ token, fingerprint: fp });
+    await requireAdminPanel({ token, fingerprint: fp });
 
     // —— 一次性防重：同进程内 30 秒内只允许一次
     const now = Date.now();

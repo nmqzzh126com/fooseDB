@@ -24,7 +24,8 @@ export const CreateObjectSchema = {
     cors_methods: { type: "string", maxLength: 500 },
     custom_sql_enabled: FLAG,
     auth_required: FLAG,
-    enabled: FLAG
+    enabled: FLAG,
+    debug: FLAG
   }
 } as const;
 
@@ -41,7 +42,8 @@ export const UpdateObjectSchema = {
     cors_methods: { type: ["string", "null"], maxLength: 500 },
     custom_sql_enabled: FLAG,
     auth_required: FLAG,
-    enabled: FLAG
+    enabled: FLAG,
+    debug: FLAG
   }
 } as const;
 

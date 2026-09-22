@@ -88,7 +88,7 @@ async function resolveAndValidateJoins(
     fingerprint: authCtx.fingerprint
   };
   for (const d of descs) {
-    const access = resolveObjectAccess(objectName, d.table, "select", resolveCtx);
+    const access = await resolveObjectAccess(objectName, d.table, "select", resolveCtx);
     d.schema = await discoverSchema(getDs(access.dsName), d.table);
   }
   validateJoins(descs);
@@ -109,7 +109,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       };
-      const access = resolveObjectAccess(object, table, "select", authArgs);
+      const access = await resolveObjectAccess(object, table, "select", authArgs);
       const q: Record<string, string> = {};
       for (const [k, v] of Object.entries(request.query)) {
         q[k] = v == null ? "" : String(v);
@@ -187,7 +187,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       };
-      const access = resolveObjectAccess(object, table, "select", authArgs);
+      const access = await resolveObjectAccess(object, table, "select", authArgs);
       const f = request.query?.fields;
       const j = request.query?.join;
       const fieldsCSV = f == null ? undefined : String(f);
@@ -208,7 +208,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   }>("/api/:object/:table", async (request, reply) => {
     const { object, table } = request.params;
     try {
-      const access = resolveObjectAccess(object, table, "insert", {
+      const access = await resolveObjectAccess(object, table, "insert", {
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -230,7 +230,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   }>("/api/:object/:table/:id", async (request, reply) => {
     const { object, table, id } = request.params;
     try {
-      const access = resolveObjectAccess(object, table, "update", {
+      const access = await resolveObjectAccess(object, table, "update", {
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -250,7 +250,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   }>("/api/:object/:table/:id", async (request, reply) => {
     const { object, table, id } = request.params;
     try {
-      const access = resolveObjectAccess(object, table, "delete", {
+      const access = await resolveObjectAccess(object, table, "delete", {
         token: request.authContext.bearerToken,
         fingerprint: request.authContext.fingerprint
       });
@@ -268,7 +268,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     Querystring: { showSql?: string };
   }>("/api/:object/:table/batch-create", async (request, reply) => {
     const { object, table } = request.params;
-    const access = resolveObjectAccess(object, table, "batch_insert", {
+    const access = await resolveObjectAccess(object, table, "batch_insert", {
       token: request.authContext.bearerToken,
       fingerprint: request.authContext.fingerprint
     });
@@ -289,7 +289,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     Querystring: { showSql?: string };
   }>("/api/:object/:table/batch-update", async (request, reply) => {
     const { object, table } = request.params;
-    const access = resolveObjectAccess(object, table, "batch_update", {
+    const access = await resolveObjectAccess(object, table, "batch_update", {
       token: request.authContext.bearerToken,
       fingerprint: request.authContext.fingerprint
     });
@@ -309,7 +309,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     Querystring: { showSql?: string };
   }>("/api/:object/:table/batch-delete", async (request, reply) => {
     const { object, table } = request.params;
-    const access = resolveObjectAccess(object, table, "batch_delete", {
+    const access = await resolveObjectAccess(object, table, "batch_delete", {
       token: request.authContext.bearerToken,
       fingerprint: request.authContext.fingerprint
     });
@@ -329,7 +329,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     Querystring: { showSql?: string };
   }>("/api/:object/:table/batch-delete-filter", async (request, reply) => {
     const { object, table } = request.params;
-    const access = resolveObjectAccess(object, table, "batch_delete", {
+    const access = await resolveObjectAccess(object, table, "batch_delete", {
       token: request.authContext.bearerToken,
       fingerprint: request.authContext.fingerprint
     });

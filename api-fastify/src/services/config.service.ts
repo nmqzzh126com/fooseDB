@@ -58,6 +58,7 @@ export interface ObjectRow {
   custom_sql_enabled: number;
   auth_required: number;
   enabled: number;
+  debug: number;
   created_at: number;
 }
 
@@ -128,19 +129,11 @@ function assertIdentifier(value: string, label: string): void {
 /**
  * 校验 db_type 合法。
  *
- * 目前只开放 sqlite / mysql——后端 datasources/postgres.ts 仍是桩（所有方法 throw），
- * 选 postgres 会导致项目创建成功但运行期请求 503。postgres 先在 UI 端标 disabled，
- * 这里再做后端守卫，双重保险。待 postgres.ts 接入 pg 驱动后，
- * 把 assertValidDbType 的白名单恢复为 "sqlite" / "mysql" / "postgres" 即可。
+ * 已开放 sqlite / mysql / postgres 三种。
  */
 function assertValidDbType(dbType: string): void {
-  if (dbType !== "sqlite" && dbType !== "mysql") {
-    throw new BusinessError(
-      400,
-      dbType === "postgres"
-        ? "db_type=postgres 暂未实现（后端驱动桩），请使用 sqlite 或 mysql"
-        : `db_type "${dbType}" 无效（仅支持 sqlite / mysql）`
-    );
+  if (!["sqlite", "mysql", "postgres"].includes(dbType)) {
+    throw new BusinessError(400, `db_type "${dbType}" 无效（仅支持 sqlite / mysql / postgres）`);
   }
 }
 
@@ -169,6 +162,11 @@ export function getObject(id: number): ObjectRow {
   return row;
 }
 
+/** 按 name 查 object 配置（认证链路用：从业务数据源反推 JWT.object_id） */
+export function getObjectByName(name: string): ObjectRow | null {
+  return getDb().prepare("SELECT * FROM object WHERE name = ?").get(name) as ObjectRow | undefined ?? null;
+}
+
 export async function createObject(input: {
   name: string;
   description?: string;
@@ -180,6 +178,7 @@ export async function createObject(input: {
   custom_sql_enabled?: number;
   auth_required?: number;
   enabled?: number;
+  debug?: number;
 }): Promise<ObjectRow> {
   assertIdentifier(input.name, "项目名称");
   if (RESERVED_OBJECT_NAMES.has(input.name.toLowerCase())) {
@@ -193,11 +192,12 @@ export async function createObject(input: {
   const auth = input.auth_required ? 1 : 0;
   const cse = input.custom_sql_enabled ? 1 : 0;
   const enabled = input.enabled === undefined ? 1 : input.enabled ? 1 : 0;
+  const debug = input.debug ? 1 : 0;
   try {
     const info = getDb()
       .prepare(
-        `INSERT INTO object(name, description, db_type, db_url, db_path, cors_origins, cors_methods, custom_sql_enabled, auth_required, enabled)
-         VALUES(?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO object(name, description, db_type, db_url, db_path, cors_origins, cors_methods, custom_sql_enabled, auth_required, enabled, debug)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         input.name,
@@ -209,7 +209,8 @@ export async function createObject(input: {
         input.cors_methods ?? null,
         cse,
         auth,
-        enabled
+        enabled,
+        debug
       );
     const row = getObject(Number(info.lastInsertRowid));
     // 动态注册数据源
@@ -235,6 +236,7 @@ export async function updateObject(
     custom_sql_enabled?: number;
     auth_required?: number;
     enabled?: number;
+    debug?: number;
   }
 ): Promise<ObjectRow> {
   const cur = getObject(id);
@@ -264,7 +266,8 @@ export async function updateObject(
         cors_methods = ?,
         custom_sql_enabled = COALESCE(?, custom_sql_enabled),
         auth_required = COALESCE(?, auth_required),
-        enabled = COALESCE(?, enabled)
+        enabled = COALESCE(?, enabled),
+        debug = COALESCE(?, debug)
       WHERE id = ?`
     )
     .run(
@@ -277,6 +280,7 @@ export async function updateObject(
       input.custom_sql_enabled === undefined ? null : input.custom_sql_enabled ? 1 : 0,
       input.auth_required === undefined ? null : input.auth_required ? 1 : 0,
       input.enabled === undefined ? null : input.enabled ? 1 : 0,
+      input.debug === undefined ? null : input.debug ? 1 : 0,
       id
     );
   const updated = getObject(id);
@@ -517,13 +521,13 @@ export function assertCallerObjectBinding(caller: JwtPayload | null, obj: Object
  * @param auth.fingerprint 客户端指纹，用于 verifyToken 时序安全比对
  * @returns 有效的管理员 JWT payload；永远不会返回 null（要么成功，要么 throw BusinessError）
  */
-export function requireSystemAdmin(auth: { token?: string; fingerprint: string }): JwtPayload {
+export async function requireSystemAdmin(auth: { token?: string; fingerprint: string }): Promise<JwtPayload> {
   if (!auth.token)
     throw new BusinessError(
       401,
       "missing bearer token | 缺少 Bearer token (sysadmin required) | 缺少 Bearer token（需要系统管理员）"
     );
-  const payload = verifyToken(auth.token, auth.fingerprint); // 签名/过期/指纹/TV 任一失败 401
+  const payload = await verifyToken(auth.token, auth.fingerprint); // 签名/过期/指纹/TV 任一失败 401
   if (payload.object_id !== SYSTEM_ADMIN_OBJECT_ID) {
     throw new BusinessError(
       403,
@@ -542,8 +546,8 @@ export function requireSystemAdmin(auth: { token?: string; fingerprint: string }
  * 没有 admin-panel scope 的 legacy admin 用户（users 表里 object_id=-1 的行）
  * 也无法通过此守卫，实现「admin 面板只能被 admin-vue 前端访问」的隔离目标。
  */
-export function requireAdminPanel(auth: { token?: string; fingerprint: string }): JwtPayload {
-  const payload = requireSystemAdmin(auth);
+export async function requireAdminPanel(auth: { token?: string; fingerprint: string }): Promise<JwtPayload> {
+  const payload = await requireSystemAdmin(auth);
   if (payload.scope !== "admin-panel") {
     throw new BusinessError(
       403,
@@ -560,12 +564,12 @@ export function requireAdminPanel(auth: { token?: string; fingerprint: string })
  *     能看到别的 object 定义/模板定义里的敏感结构（SQL 占位、数据源绑定）。
  * 若将来需要「绑定用户可看自己项目」的读接口，可以把这个函数改成 return payload 并过滤列表。
  */
-export function requireSystemAdminForManage(auth: {
+export async function requireSystemAdminForManage(auth: {
   token?: string;
   fingerprint: string;
-}): JwtPayload {
+}): Promise<JwtPayload> {
   // 所有管理端路由现在统一用 requireAdminPanel 守卫（更严格：额外要求 scope=admin-panel）
-  return requireAdminPanel(auth);
+  return await requireAdminPanel(auth);
 }
 
 /**
@@ -608,12 +612,12 @@ export function requireSystemAdminForManage(auth: {
  *   不再有"项目没有任何 object_table 行就放行所有表"的黑名单回退。
  *   这符合安全最小权限原则：管理员逐一勾选哪些表开放、哪些操作允许。
  */
-export function resolveObjectAccess(
+export async function resolveObjectAccess(
   objectName: string,
   tableName: string,
   operation: Operation,
   auth: { token?: string; fingerprint: string }
-): ObjectAccess {
+): Promise<ObjectAccess> {
   // ================================================
   // ① 先查 object 表（按 URL 第一段 object.name）
   // ================================================
@@ -677,12 +681,12 @@ export function resolveObjectAccess(
   let caller: JwtPayload | null = null;
   if (obj.auth_required === 1) {
     if (!auth.token) throw new BusinessError(401, "missing bearer token | 缺少 Bearer token（该项目要求登录）");
-    caller = verifyToken(auth.token, auth.fingerprint);
+    caller = await verifyToken(auth.token, auth.fingerprint);
   } else if (auth.token) {
     // auth_required=0 但调用方也带了 token → 尝试解析（不强制失败），
     // 用于管理员 object_id=-1 / 绑定用户访问非强制认证项目时，仍能过绑定校验。
     try {
-      caller = verifyToken(auth.token, auth.fingerprint);
+      caller = await verifyToken(auth.token, auth.fingerprint);
     } catch {
       caller = null;
     }

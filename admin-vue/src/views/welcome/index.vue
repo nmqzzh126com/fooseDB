@@ -13,9 +13,7 @@ import {
   Plus,
   Setting,
   Connection,
-  User,
-  VideoPlay,
-  VideoPause,
+  User,  
   DocumentCopy,
   Postcard,
   Operation,
@@ -31,12 +29,15 @@ import {
   countTableRules
 } from "@/api/foosePureAdmin";
 import { ElMessage, ElMessageBox } from "element-plus";
+import Log from "./log.vue";
 defineOptions({
   name: "Welcome"
 });
-const objectList = ref<ObjectDef[]>([]);// 接口列表
-const dialogEditVisible = ref<boolean>(false);//编辑弹窗是否显示
-const objectId = ref(0);//接口id 
+const objectList = ref<ObjectDef[]>([]); // 接口列表
+const dialogEditVisible = ref<boolean>(false); //编辑弹窗是否显示
+const objectId = ref(0); //接口id
+const objectName = ref(""); //接口名称
+const dialogLogVisible = ref<boolean>(false); //日志弹窗是否显示
 
 onMounted(async () => {
   await loadObjects();
@@ -66,21 +67,17 @@ async function handleEdit(row: ObjectDef) {
 }
 /** 删除单条 */
 async function handleDelete(row: ObjectDef) {
-  await ElMessageBox.confirm(
-    `确认删除接口 ${row.name} 吗？`,
-    '请确认',
-    {
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    }
-  )
+  await ElMessageBox.confirm(`确认删除接口 ${row.name} 吗？`, "请确认", {
+    confirmButtonText: "确认删除",
+    cancelButtonText: "取消",
+    type: "warning"
+  })
     .then(async () => {
       try {
         await deleteObject(row.id);
         ElMessage({
-          type: 'success',
-          message: `删除接口 ${row.name} 成功`,
+          type: "success",
+          message: `删除接口 ${row.name} 成功`
         });
         await loadObjects();
       } catch (err: any) {
@@ -89,10 +86,10 @@ async function handleDelete(row: ObjectDef) {
     })
     .catch(() => {
       ElMessage({
-        type: 'info',
-        message: '取消删除',
-      })
-    })
+        type: "info",
+        message: "取消删除"
+      });
+    });
 }
 /** 配置用户 */
 async function handleUser(row: ObjectDef) {
@@ -106,59 +103,96 @@ async function handleTable(row: ObjectDef) {
 async function handleRole(row: ObjectDef) {
   toTabRole({ object_id: row.id || 0, object_name: row.name || "" });
 }
-
-
+/** 查看日志 */
+async function handleLog(row: ObjectDef) {
+  objectId.value = row.id;
+  objectName.value = row.name;
+  dialogLogVisible.value = true;
+}
 
 /** 处理下拉菜单命令 */
 async function handleCommand(row: ObjectDef, command: string) {
   //console.log(command, row);
-  if (command === 'edit') {
+  if (command === "edit") {
     handleEdit(row);
-  } else if (command === 'user') {
+  } else if (command === "user") {
     handleUser(row);
-  } else if (command === 'role') {
+  } else if (command === "role") {
     handleRole(row);
-  } else if (command === 'table') {
+  } else if (command === "table") {
     handleTable(row);
-  } else if (command === 'delete') {
+  } else if (command === "delete") {
     handleDelete(row);
+  } else if (command === "log") {
+    handleLog(row);
   }
 }
-
-
-
 </script>
 
 <template>
   <div class="p-2">
     <el-row :gutter="15">
-      <el-col v-for="item in objectList" :key="item.id" :span="12" class="mb-2" @dblclick="handleEdit(item)">
+      <el-col
+        v-for="item in objectList"
+        :key="item.id"
+        :span="12"
+        class="mb-2"
+        @dblclick="handleEdit(item)"
+      >
         <el-card>
           <template #header>
             <div :title="'接口ID:' + item.id">
               <el-row>
                 <el-col :span="16">
-                  <el-text :type="item.enabled === 1 ? 'primary' : 'danger'" truncated class="ml-2!">
+                  <el-text
+                    :type="item.enabled === 1 ? 'primary' : 'danger'"
+                    truncated
+                    class="ml-2!"
+                  >
                     {{ item.name }}
                   </el-text>
                 </el-col>
                 <el-col :span="8" class="text-right">
-                  <el-button v-if="item.enabled === 1" type="success" size="small" plain :icon="CaretRight">
+                  <el-button
+                    v-if="item.enabled === 1"
+                    type="success"
+                    size="small"
+                    plain
+                    :icon="CaretRight"
+                  >
                     运行中
                   </el-button>
                   <el-button v-else type="danger" size="small" plain :icon="SwitchButton">
                     已停止
                   </el-button>
-                  <el-dropdown placement="bottom" class="mt-0.5" @command="handleCommand(item, $event)">
-                    <el-button size="small" type="primary" class="my-button" plain :icon="Operation" />
+                  <el-dropdown
+                    placement="bottom"
+                    class="mt-0.5"
+                    @command="handleCommand(item, $event)"
+                  >
+                    <el-button
+                      size="small"
+                      type="primary"
+                      class="my-button"
+                      plain
+                      :icon="Operation"
+                    />
                     <template #dropdown>
                       <el-dropdown-menu>
                         <el-dropdown-item command="edit" :icon="Setting">编辑接口</el-dropdown-item>
                         <el-dropdown-item command="user" :icon="User"> 用户配置</el-dropdown-item>
                         <el-dropdown-item command="role" :icon="Menu"> 角色配置</el-dropdown-item>
-                        <el-dropdown-item command="table" :icon="DocumentCopy">数据表配置</el-dropdown-item>
-                        <el-dropdown-item :disabled="item.name == 'sqlite_demo'" divided command="delete"
-                          :icon="Delete">删除接口</el-dropdown-item>
+                        <el-dropdown-item command="table" :icon="DocumentCopy"
+                          >数据表配置</el-dropdown-item
+                        >
+                        <el-dropdown-item command="log" :icon="Postcard">调试日志</el-dropdown-item>
+                        <el-dropdown-item
+                          :disabled="item.name == 'sqlite_demo'"
+                          divided
+                          command="delete"
+                          :icon="Delete"
+                          >删除接口</el-dropdown-item
+                        >
                       </el-dropdown-menu>
                     </template>
                   </el-dropdown>
@@ -207,7 +241,12 @@ async function handleCommand(row: ObjectDef, command: string) {
                     <Connection />
                   </el-icon>
                   CORS白名单：
-                  <el-tag v-for="origin in item.cors_origins.split(',')" :key="origin" class="mx-1" type="warning">
+                  <el-tag
+                    v-for="origin in item.cors_origins?.split(',')"
+                    :key="origin"
+                    class="mx-1"
+                    type="warning"
+                  >
                     {{ origin }}
                   </el-tag>
                 </el-text>
@@ -239,9 +278,21 @@ async function handleCommand(row: ObjectDef, command: string) {
         </el-card>
       </el-col>
       <el-col :span="12" class="pt-5">
-        <el-button type="primary" class="ml-2!" :icon="Plus" plain @click="handleCreate">创建新接口</el-button>
+        <el-button type="primary" class="ml-2!" :icon="Plus" plain @click="handleCreate"
+          >创建新接口</el-button
+        >
       </el-col>
     </el-row>
+    <el-dialog v-model="dialogLogVisible" title="接口日志" width="90vw" destroy-on-close>
+      <div>
+        <Log :object-id="objectId" :object-name="objectName" />
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button type="primary" plain @click="dialogLogVisible = false"> 关闭 </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

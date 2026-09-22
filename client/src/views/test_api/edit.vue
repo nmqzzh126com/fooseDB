@@ -1,31 +1,22 @@
 <script setup lang="ts" name="EditProduct">
 import { ref, reactive, onMounted, inject, toRaw } from "vue";
-import { ProductRow, useProduct } from "@/api/demo/product_api";
-import { ProductTypeRow, useProductType } from "@/api/demo/product_type_api";
-import { ProductLabelRow, useProductLabel } from "@/api/demo/product_label_api";
-import { FooseListParams, FoosePage } from "@/api/foose_db";
+import { useProduct, type ProductRow } from "@/api/demo/product_api";
+import {
+  useProductType,
+  type ProductTypeRow
+} from "@/api/demo/product_type_api";
+import {
+  useProductLabel,
+  type ProductLabelRow
+} from "@/api/demo/product_label_api";
+import type { FooseListParams, FoosePage } from "@/api/foose_db";
 import { ElMessage } from "element-plus";
-import FooseTools from "@/api/foose_db_tools";
+import { FooseTools } from "@/api/foose_db";
 
-const {
-  productCurrentRow,
-  productDbLoading,
-  productDbError,
-  productDbGet,
-  productDbGetBy,
-  productDbCreate,
-  productDbUpdate
-} = useProduct();
-const { productTypeDbLoading, productTypeDbError, productTypeDbList } =
-  useProductType();
-const {
-  productLabelDbLoading,
-  productLabelDbError,
-  productLabelDbList,
-  productLabelDbCreate,
-  productLabelDbRemoves,
-  productLabelDbRemovesByFilter
-} = useProductLabel();
+// ✅ 同组件多表场景 — 存整个对象，干净 key 不冲突
+const product = useProduct();
+const productType = useProductType();
+const productLabel = useProductLabel();
 
 const props = defineProps({
   id: {
@@ -40,8 +31,9 @@ const productForm = ref<ProductRow>({
   product_count: 0,
   product_desc: ""
 } as ProductRow);
-const productTypeOptions = ref<ProductTypeRow[]>([]); //产品类型选项
-const productLabelOptions = ref<string[]>([]); //产品标签选项
+const productTypeOptions = ref<ProductTypeRow[]>([]);
+const productLabelOptions = ref<string[]>([]);
+
 onMounted(async () => {
   await loadProduct();
   await loadProctTypeList();
@@ -50,44 +42,36 @@ onMounted(async () => {
 
 async function loadProduct() {
   if (!props.id || props.id === 0) {
-    console.log("产品ID为空,进入添加模式!");
     return;
   }
   try {
-    const row: ProductRow = await productDbGet(props.id);
-    //console.log(row, productCurrentRow.value);
+    const row: ProductRow = await product.getRow(props.id);
     if (!row) {
-      productDbError.value = "产品不存在";
+      product.errorInfo.value = "产品不存在";
       return;
     }
     productForm.value = row as unknown as ProductRow;
   } catch (e) {
-    productDbError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    productDbLoading.value = false;
+    product.errorInfo.value = e instanceof Error ? e.message : String(e);
   }
 }
+
 async function loadProctTypeList() {
   try {
     const params: FooseListParams = {
-      //showSql: true,//是否显示SQL语句
-      noPage: true, //是否不分页
-      pageSize: 100, //每页数量,最多取100条数据
-      filter: {
-        flag: 0
-      }
+      noPage: true,
+      pageSize: 100,
+      filter: { flag: 0 }
     };
-    const rows: FoosePage<ProductTypeRow> = await productTypeDbList(params);
-    //console.log(rows);
+    const rows: FoosePage<ProductTypeRow> =
+      await productType.getPageList(params);
     if (!rows.data || rows.data.length === 0) {
-      productTypeDbError.value = "产品类型不存在";
+      productType.errorInfo.value = "产品类型不存在";
       return;
     }
     productTypeOptions.value = rows.data;
   } catch (e) {
-    productTypeDbError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    productTypeDbLoading.value = false;
+    productType.errorInfo.value = e instanceof Error ? e.message : String(e);
   }
 }
 
@@ -97,26 +81,22 @@ async function loadProductLabelList() {
   }
   try {
     const params: FooseListParams = {
-      showSql: true, //是否显示SQL语句
-      noPage: true, //是否不分页
-      pageSize: 100, //每页数量,最多取100条数据
+      noPage: true,
+      pageSize: 100,
       filter: {
         product_id: { _eq: productForm.value.id },
         flag: 0
       }
     };
-    const rows: FoosePage<ProductLabelRow> = await productLabelDbList(params);
-    //console.log(rows);
+    const rows: FoosePage<ProductLabelRow> =
+      await productLabel.getPageList(params);
     if (!rows.data || rows.data.length === 0) {
-      productLabelDbError.value = "产品标签不存在";
+      productLabel.errorInfo.value = "产品标签不存在";
       return;
     }
     productLabelOptions.value = rows.data.map(item => item.title);
-    console.log(productLabelOptions.value);
   } catch (e) {
-    productLabelDbError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    productLabelDbLoading.value = false;
+    productLabel.errorInfo.value = e instanceof Error ? e.message : String(e);
   }
 }
 
@@ -125,31 +105,20 @@ async function findProductLabelRows(
 ): Promise<ProductLabelRow[]> {
   try {
     const params: FooseListParams = {
-      //showSql: true,//是否显示SQL语句
-      noPage: true, //是否不分页
-      pageSize: 100, //每页数量,最多取100条数据
-      //fields: ["my_id"],
-      filter: {
-        product_id: { _eq: productId }
-      }
+      noPage: true,
+      pageSize: 100,
+      filter: { product_id: { _eq: productId } }
     };
-    const rows: FoosePage<ProductLabelRow> = await productLabelDbList(params);
-    //console.log("find产品标签列表:", rows);
-    if (!rows.data || rows.data.length === 0) {
-      return [];
-    }
+    const rows: FoosePage<ProductLabelRow> =
+      await productLabel.getPageList(params);
+    if (!rows.data || rows.data.length === 0) return [];
     return rows.data;
   } catch (e) {
-    productLabelDbError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    productLabelDbLoading.value = false;
+    productLabel.errorInfo.value = e instanceof Error ? e.message : String(e);
   }
   return [];
 }
 
-/**
- * 提交数据
- */
 async function submitData() {
   productForm.value.id = Number(productForm.value.id || 0);
   productForm.value.product_type_id = Number(productForm.value.product_type_id);
@@ -160,6 +129,7 @@ async function submitData() {
   productForm.value.product_name = (
     productForm.value.product_name || ""
   ).trim();
+
   if (
     !productForm.value.product_name ||
     productForm.value.product_name.length === 0
@@ -177,14 +147,13 @@ async function submitData() {
 
   try {
     if (productForm.value.id > 0) {
-      const row: ProductRow = toRaw(productForm.value); //{ ...productForm.value };
-      console.log("更新产品:", row);
-      await productDbUpdate(productForm.value.id, row);
+      const row: ProductRow = toRaw(productForm.value);
+      await product.update(productForm.value.id, row);
       ElMessage.success("更新成功");
     } else {
       const row: ProductRow = toRaw(productForm.value);
-      delete row.id; //删除id,由数据库自动生成
-      const newRow = await productDbCreate(row);
+      delete row.id;
+      const newRow = await product.create(row);
       if (newRow) {
         ElMessage.success("创建成功");
       } else {
@@ -194,94 +163,70 @@ async function submitData() {
     handleEditClose(true);
   } catch (e) {
     ElMessage.error("操作失败~!");
-    productDbError.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    productDbLoading.value = false;
+    product.errorInfo.value = e instanceof Error ? e.message : String(e);
   }
 }
 
-/**
- * 产品标签改变时调用
- */
 async function handleLabelChange(val: string[]) {
   const labelRows = await findProductLabelRows(Number(productForm.value.id));
   const ids = labelRows.map(item => item.my_id);
   if (!val || val.length === 0) {
-    // 清空产品标签1
     if (ids && ids.length > 0) {
-      const { ok, deleted, sql, sqlParams } =
-        await productLabelDbRemovesByFilter(
-          {
-            product_id: { _eq: Number(productForm.value.id) }
-          },
-          true
-        );
-      console.log("清空产品标签filter:", ok, deleted, sql, sqlParams);
-      if (ok) {
-        ElMessage.success(`清空成功:${deleted}`);
+      const res = await productLabel.removesByFilter(
+        { product_id: { _eq: Number(productForm.value.id) } },
+        true
+      );
+      if (res.ok) {
+        ElMessage.success(`清空成功:${res.deleted}`);
       } else {
         ElMessage.error("清空失败");
       }
     }
-    // 清空产品标签2
-    // if (ids && ids.length > 0) {
-    //   const { ok, deleted } = await productLabelDbRemoves(ids);
-    //   if (ok) {
-    //     ElMessage.success(`清空成功:${deleted}`);
-    //   } else {
-    //     ElMessage.error("清空失败");
-    //   }
-    // }
     return;
-  } else {
-    //添加或删除产品标签
-    const addRows = val.filter(
-      item => !labelRows.some(item2 => item2.title === item)
-    );
-    if (addRows && addRows.length > 0) {
-      //console.log("add产品标签:", addRows);
-      for (const item of addRows) {
-        const title = item.trim();
-        const newRow = await productLabelDbCreate({
-          my_id: FooseTools.createUuid(),
-          product_id: Number(productForm.value.id),
-          title: title
-        });
-        //console.log("添加产品标签:", newRow);
-        if (newRow) {
-          ElMessage.success(`添加成功:${newRow.my_id}`);
-        } else {
-          ElMessage.error("添加失败");
-        }
-      }
-    }
-    let removeIds = [];
-    for (const item of labelRows) {
-      if (!val.includes(item.title)) {
-        removeIds.push(item.my_id);
-      }
-    }
-    if (removeIds && removeIds.length > 0) {
-      //console.log("remove产品标签:", removeIds);
-      const { ok, deleted } = await productLabelDbRemoves(removeIds);
-      if (ok) {
-        ElMessage.success(`删除成功:${deleted}`);
+  }
+
+  const addRows = val.filter(
+    item => !labelRows.some(item2 => item2.title === item)
+  );
+  if (addRows && addRows.length > 0) {
+    for (const item of addRows) {
+      const title = item.trim();
+      const newRow = await productLabel.create({
+        my_id: FooseTools.createUuid(),
+        product_id: Number(productForm.value.id),
+        title
+      });
+      if (newRow) {
+        ElMessage.success(`添加成功:${newRow.my_id}`);
       } else {
-        ElMessage.error("删除失败");
+        ElMessage.error("添加失败");
       }
+    }
+  }
+
+  const removeIds = labelRows
+    .filter(item => !val.includes(item.title))
+    .map(item => item.my_id);
+  if (removeIds && removeIds.length > 0) {
+    const res = await productLabel.removes(removeIds);
+    if (res.ok) {
+      ElMessage.success(`删除成功:${res.deleted}`);
+    } else {
+      ElMessage.error("删除失败");
     }
   }
   await loadProductLabelList();
 }
-//父组件中的方法
+
 const handleEditClose = inject<(reload: boolean) => void>(
   "handle-edit-close",
   () => {}
 );
 </script>
+
 <template>
   <div>
-    <div v-if="productDbError">{{ productDbError }}</div>
+    <div v-if="product.errorInfo">{{ product.errorInfo }}</div>
     <div>
       <el-form :model="productForm" label-width="120" style="max-width: 100%">
         <el-row :gutter="20">

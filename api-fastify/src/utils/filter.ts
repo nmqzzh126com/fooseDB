@@ -15,6 +15,27 @@ import { quoteId } from "./schema.js";
 import type { JoinDesc } from "./join.js";
 import { MAIN_TABLE_ALIAS, joinTableAlias } from "./join.js";
 
+/**
+ * 把字符串值 coerce 成数值（仅当"看起来像数字"时）。
+ * 注意：**调用方必须先确定列类型是数值列再调此函数**——不要无脑对所有字符串做 coerce，
+ * 否则 SQLite 的 WHERE text_col = 444（绑定 INTEGER）会查不到 "444"（better-sqlite3 类型绑定行为）。
+ */
+function coerceValue(v: string): string | number {
+  if (/^-?\d+$/.test(v)) return Number(v);
+  if (/^-?\d+\.\d+$/.test(v)) return Number(v);
+  return v;
+}
+
+/** 判断列类型字符串是否是数值列（SQLite 亲和性规则 + MySQL/PG 常见类型） */
+function isNumericColType(t: string): boolean {
+  const up = t.toUpperCase();
+  if (/INT/i.test(up)) return true;           // INTEGER, TINYINT, SMALLINT, MEDIUMINT, BIGINT, INT
+  if (/REAL|FLOA|DOUB/i.test(up)) return true; // REAL, FLOAT, DOUBLE, DOUBLE PRECISION
+  if (/NUMERIC|DECIMAL/i.test(up)) return true; // NUMERIC, DECIMAL
+  if (/BOOL/i.test(up)) return true;           // BOOLEAN (SQLite 里是 INTEGER)
+  return false;                                 // TEXT, VARCHAR, CHAR, DATETIME, DATE, TIME, BLOB → 不 coerce
+}
+
 type FilterOp =
   | "_eq"
   | "_neq"
@@ -349,9 +370,11 @@ function renderAtom(
   //   例：pt.name[_eq]=台式机            → as=pt, col=name
   //   例：comments.body[_contains]=hello → table=comments, col=body
   const dotIdx = field.indexOf(".");
+  let prefix: string | undefined;
+  let subField: string | undefined;
   if (dotIdx > 0) {
-    const prefix = field.slice(0, dotIdx);
-    const subField = field.slice(dotIdx + 1);
+    prefix = field.slice(0, dotIdx);
+    subField = field.slice(dotIdx + 1);
     if (!joins || joins.length === 0) {
       throw new BusinessError(
         400,
@@ -396,15 +419,40 @@ function renderAtom(
       : quoteId(field, dsType);
   }
 
-  // URL query 参数全是字符串。尝试把"看起来像数字"的值转成数字，
-  // 避免 SQLite 字符串 vs 数字比较时出现意外行为（如 HAVING "cnt" > "2" 永远为 false）。
-  // 只对纯整数字符串 / 纯小数字符串做转换，不破坏真正需要字符串的场景。
-  function coerceValue(v: string): string | number {
-    if (/^-?\d+$/.test(v)) return Number(v);
-    if (/^-?\d+\.\d+$/.test(v)) return Number(v);
-    return v;
+  // —— URL query 参数全是字符串。只对「数值列」的值做 coerceValue ——
+  // 原因：better-sqlite3 绑定 Number/8 → INTEGER，绑定 "8" → TEXT。
+  //   在 SQLite 中 WHERE text_col = 8 绑定 INTEGER 会查不到 "8"（TEXT 亲和性 vs INTEGER 常量）。
+  //   但 WHERE int_col = "8" 绑定字符串也能工作（SQLite 会转数值）。
+  // 所以：**宁可保守保留字符串，也不要错转 TEXT 列**。
+
+  /** 从 schema 或 join schema 中找到列类型 */
+  function findColType(colName: string, colSchema: TableSchema): string | null {
+    return colSchema.columns.find(c => c.name === colName)?.type ?? null;
   }
-  const value = coerceValue(rawValue);
+
+  let colType: string | null;
+  if (dotIdx > 0) {
+    // 子表列 — 从 join.schema 查
+    const joinIdx = joins!.findIndex(j => j.as === prefix || j.table === prefix);
+    colType = joinIdx >= 0 && joins![joinIdx].schema
+      ? findColType(subField!, joins![joinIdx].schema!)
+      : null;
+  } else {
+    // 主表列
+    colType = findColType(field, schema);
+  }
+
+  let value: string | number;
+  const shouldCoerce = !!(colType && isNumericColType(colType));
+  if (shouldCoerce) {
+    // 明确是数值列 → 安全 coerce
+    value = coerceValue(rawValue);
+  } else {
+    // TEXT / VARCHAR / DATETIME / 未知列 → 一律保留字符串
+    value = rawValue;
+  }
+  // 给 _in / _nin / _between 复用的安全 coerce 回调
+  const safeCoerce = (s: string) => (shouldCoerce ? coerceValue(s) : s);
 
   switch (op) {
     case "_eq":
@@ -439,7 +487,7 @@ function renderAtom(
         params: [`%${escapeLike(String(value))}`]
       };
     case "_in": {
-      const items = splitCsv(rawValue).map(coerceValue);
+      const items = splitCsv(rawValue).map(safeCoerce);
       if (items.length === 0) {
         // IN () 空集：SQLite/MySQL 都报语法错误，显式抛错给前端更友好
         throw new BusinessError(
@@ -454,7 +502,7 @@ function renderAtom(
       return { clause: `${qualifiedCol} IN (${placeholders})`, params: items };
     }
     case "_nin": {
-      const items = splitCsv(rawValue).map(coerceValue);
+      const items = splitCsv(rawValue).map(safeCoerce);
       if (items.length === 0) {
         throw new BusinessError(
           400,
@@ -486,7 +534,7 @@ function renderAtom(
       }
       return {
         clause: `${qualifiedCol} BETWEEN ? AND ?`,
-        params: [coerceValue(minStr), coerceValue(maxStr)]
+        params: [safeCoerce(minStr), safeCoerce(maxStr)]
       };
     }
     default:

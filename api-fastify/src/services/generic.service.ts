@@ -32,6 +32,40 @@ import {
 } from "../utils/filter.js";
 import { BusinessError } from "../utils/errors.js";
 import { buildJoinSelect, nestJoinedResults, type JoinDesc } from "../utils/join.js";
+import { hashPassword } from "./auth.service.js";
+
+/**
+ * 如果 row 含 password 列且值不是 bcrypt hash（不以 $2 开头），自动 hash 后原地替换。
+ * 供 insertRow / updateRow / batchCreate / batchUpdate 统一调用，确保明文密码永远不会入库。
+ */
+async function hashPasswordFieldIfNeeded(
+  row: Record<string, unknown>
+): Promise<void> {
+  if (typeof row.password !== "string") return;
+  if (row.password.startsWith("$2")) return; // 已是 bcrypt hash，跳过
+  row.password = await hashPassword(row.password);
+}
+
+/**
+ * 读取路径的 password 脱敏 —— 把所有返回行的 password 列置为空字符串。
+ * 供 list / getById / getOne 统一调用，bcrypt hash 绝不能暴露到前端。
+ * 支持单行（Record）和多行（Record[]）两种形态。
+ */
+function maskPasswordOnRead<T>(data: T): T {
+  if (Array.isArray(data)) {
+    for (const row of data as Record<string, unknown>[]) {
+      if (row && Object.prototype.hasOwnProperty.call(row, "password")) {
+        row.password = "";
+      }
+    }
+  } else if (data && typeof data === "object") {
+    const row = data as Record<string, unknown>;
+    if (Object.prototype.hasOwnProperty.call(row, "password")) {
+      row.password = "";
+    }
+  }
+  return data;
+}
 
 /**
  * 给 SQL 执行错误挂上 sql + sqlParams，方便 showSql=true 时路由层把调试信息返回前端。
@@ -371,7 +405,7 @@ export async function list(
   const nested = useJoins ? nestJoinedResults(rows, joinList, schema.primaryKey) : rows;
 
   const paginated: ListResponse = {
-    data: nested,
+    data: maskPasswordOnRead(nested),
     meta: { mode: "paginated", total, page, pageSize, totalPages: Math.ceil(total / pageSize) || 0 }
   };
   if (params.showSql) {
@@ -458,10 +492,10 @@ export async function getById(
     [id]
   );
   if (rows.length === 0) throw new BusinessError(404, `Row not found | 未找到行: ${id}`);
-  if (!useJoins) return rows[0];
+  if (!useJoins) return maskPasswordOnRead(rows[0]);
   const nested = nestJoinedResults(rows, joins!, schema.primaryKey);
   if (nested.length === 0) throw new BusinessError(404, `Row not found | 未找到行: ${id}`);
-  return nested[0];
+  return maskPasswordOnRead(nested[0]);
 }
 
 /** 按条件查一行（返回第一条匹配；条件仍然使用 Directus 风格 query 解析）；
@@ -523,7 +557,7 @@ export async function getOne(
       params
     );
     if (rows.length === 0) throw new BusinessError(404, "Row not found | 未找到行");
-    return rows[0];
+    return maskPasswordOnRead(rows[0]);
   }
   const rows = await queryWithSql<Record<string, unknown>>(ds,
     useJoins
@@ -532,9 +566,9 @@ export async function getOne(
     params
   );
   if (rows.length === 0) throw new BusinessError(404, "Row not found | 未找到行");
-  if (!useJoins) return rows[0];
+  if (!useJoins) return maskPasswordOnRead(rows[0]);
   const nested = nestJoinedResults(rows, joinsEff, schema.primaryKey);
-  return nested[0];
+  return maskPasswordOnRead(nested[0]);
 }
 
 /**
@@ -562,6 +596,7 @@ export async function insertRow(
   for (const [k, v] of Object.entries(data)) {
     if (schema.columnNames.has(k)) filtered[k] = v;
   }
+  await hashPasswordFieldIfNeeded(filtered); // 自动 bcrypt password（如果有）
   const keys = Object.keys(filtered);
   if (keys.length === 0)
     throw new BusinessError(400, "No valid columns to insert | 没有可插入的有效列");
@@ -594,12 +629,12 @@ export async function insertRow(
 
   // —— 没有主键的表：直接返回写入列 + lastInsertRowid 兜底 ——
   if (pk === null) {
-    return { ok: true, row: { ...filtered, lastInsertRowid: Number(result.lastInsertRowid) } };
+    return { ok: true, row: maskPasswordOnRead({ ...filtered, lastInsertRowid: Number(result.lastInsertRowid) }) };
   }
 
   // —— 没有确定主键值：不回查，避免 WHERE pk = NULL 查出意外结果 ——
   if (pkValue === undefined) {
-    return { ok: true, row: { ...filtered, [pk]: null as unknown } };
+    return { ok: true, row: maskPasswordOnRead({ ...filtered, [pk]: null as unknown }) };
   }
 
   // —— 回查（fields 允许裁剪输出列；已预构建）——
@@ -607,9 +642,9 @@ export async function insertRow(
     `SELECT ${selectSql} FROM ${tbl} WHERE ${quoteId(pk, ds.type)} = ? LIMIT 1`,
     [pkValue]
   );
-  if (rows[0]) return { ok: true, row: rows[0] };
+  if (rows[0]) return { ok: true, row: maskPasswordOnRead(rows[0]) };
   // 回查失败（少见）：兜底返回写入列 + 主键值
-  return { ok: true, row: { ...filtered, [pk]: pkValue } };
+  return { ok: true, row: maskPasswordOnRead({ ...filtered, [pk]: pkValue }) };
 }
 
 /**
@@ -633,6 +668,7 @@ export async function updateRow(
   for (const [k, v] of Object.entries(data)) {
     if (schema.columnNames.has(k) && k !== pk) filtered[k] = v;
   }
+  await hashPasswordFieldIfNeeded(filtered); // 自动 bcrypt password（如果有）
   const keys = Object.keys(filtered);
   if (keys.length === 0)
     throw new BusinessError(400, "No valid columns to update | 没有可更新的有效列");
@@ -658,7 +694,7 @@ export async function updateRow(
     );
     if (rows[0]) row = rows[0];
   }
-  return { ok: true, row };
+  return { ok: true, row: maskPasswordOnRead(row) };
 }
 
 /** 按主键删除一行 */
@@ -819,6 +855,9 @@ export async function batchCreate(
   const tbl = quoteId(table, ds.type);
   const colsSql = cols.map(c => quoteId(c, ds.type)).join(", ");
 
+  // 预先 hash 所有行的 password（如果有）
+  for (const r of rows) await hashPasswordFieldIfNeeded(r as Record<string, unknown>);
+
   // 按统一列顺序构造 values + params
   const allParams: unknown[] = [];
   const valueClauses: string[] = [];
@@ -892,7 +931,7 @@ export async function batchCreate(
   const resp: { ok: true; created: number; rows: Record<string, unknown>[]; sql?: string; sqlParams?: unknown[] } = {
     ok: true,
     created: rows.length,
-    rows: newRows
+    rows: maskPasswordOnRead(newRows)
   };
   if (showSql) {
     resp.sql = insertSql;
@@ -950,6 +989,7 @@ export async function batchUpdate(
         for (const [k, v] of Object.entries(patch)) {
           if (schema.columnNames.has(k) && k !== pk) filtered[k] = v;
         }
+        await hashPasswordFieldIfNeeded(filtered); // 自动 bcrypt password（如果有）
         const keys = Object.keys(filtered);
         if (keys.length === 0) {
           // 跳过空 patch —— 仍然回查当前行
@@ -989,7 +1029,7 @@ export async function batchUpdate(
   const resp: { ok: true; updated: number; rows: Record<string, unknown>[]; sql?: string; sqlParams?: unknown[] } = {
     ok: true,
     updated: rows.length,
-    rows: updatedRows
+    rows: maskPasswordOnRead(updatedRows)
   };
   if (showSql && sampleSql) {
     resp.sql = sampleSql;

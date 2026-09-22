@@ -2,15 +2,8 @@
 import { ref, reactive, inject, onMounted, toRaw } from 'vue'
 import { ProductTypeRow, useProductType } from "@/api/demo/product_type_api";
 import { ElMessage } from "element-plus";
-import { FooseListParams } from '@/api/foose_db';
-const { productTypeDbDataList,
-  productTypeDbLoading, productTypeDbError,
-  productTypeDbTotal, productTypeDbList,
-  productTypeDbPage, productTypeDbPageSize,
-  productTypeDbCreate, productTypeDbRemove,
-  productTypeDbGet, productTypeDbGetBy,
-  productTypeDbUpdate
-} = useProductType();
+
+const productType = reactive(useProductType());
 
 const props = defineProps({
   id: {
@@ -26,7 +19,7 @@ const productTypeForm = ref<ProductTypeRow>({
 } as ProductTypeRow);
 
 onMounted(async () => {
-  const res = await productTypeDbGet(props.id);
+  const res = await productType.getRow(props.id);
   if (res) {
     productTypeForm.value = res;
   } else {
@@ -53,12 +46,12 @@ async function submitData() {
     if (productTypeForm.value.id > 0) {
       const row: ProductTypeRow = toRaw(productTypeForm.value); //{ ...productTypeForm.value };
       console.log("更新产品类型:", row);
-      await productTypeDbUpdate(productTypeForm.value.id, row);
+      await productType.update(productTypeForm.value.id, row);
       ElMessage.success("更新成功");
     } else {
       const row: ProductTypeRow = toRaw(productTypeForm.value);
       delete row.id;//删除id,由数据库自动生成      
-      const newRow = await productTypeDbCreate(row);
+      const newRow = await productType.create(row);
       if (newRow) {
         ElMessage.success("创建成功");
       } else {
@@ -68,9 +61,9 @@ async function submitData() {
     handleEditTypeClose(true);
   } catch (e) {
     ElMessage.error("操作失败~!");
-    productTypeDbError.value = e instanceof Error ? e.message : String(e);
+    productType.errorInfo = e instanceof Error ? e.message : String(e);
   } finally {
-    productTypeDbLoading.value = false;
+    productType.loading = false;
   }
 }
 
@@ -79,7 +72,7 @@ const handleEditTypeClose = inject<(reload: boolean) => void>("handle-edit-type-
 </script>
 <template>
   <div>
-    <div v-if="productTypeDbError">{{ productTypeDbError }}</div>
+    <div v-if="productType.errorInfo">{{ productType.errorInfo }}</div>
     <div>
       <el-form :model="productTypeForm" label-width="120" style="max-width: 100%">
         <el-row :gutter="20">
