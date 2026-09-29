@@ -1,0 +1,41 @@
+{
+  "name": "@fooseDB/sdk",
+  "version": "0.1.1",
+  "description": "FoosDB 通用客户端 SDK — 纯 TS，零业务耦合，支持浏览器 / Node.js / SSR",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "keywords": ["foosedb", "sdk", "fastify", "crud", "directus", "api-client"],
+  "license": "MIT",
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "sync": "node scripts/sync-to-store.js",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "axios": ">=1.0.0"
+  },
+  "peerDependencies": {
+    "vue": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vue": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vue": "^3.5.0"
+  }
+}

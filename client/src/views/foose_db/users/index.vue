@@ -17,7 +17,7 @@ import { debounce } from "@pureadmin/utils";
 import { TableInstance, ElMessage, ElMessageBox } from "element-plus";
 import { FooseUserRow, useUser } from "@/api/foose_user_role/foose_user_api";
 import type { FooseListParams } from "@/api/foose_db";
-import { FooseTools } from "@/api/foose_db";
+import { FooseTools } from "@/api/foose_db_tools";
 const {
   listResult: userList, // Ref<FooseUserRow[]>   — 列表数据（自动被 getPageList/create/update/remove 同步）
   loading, // Ref<boolean>        — 当前是否正在请求

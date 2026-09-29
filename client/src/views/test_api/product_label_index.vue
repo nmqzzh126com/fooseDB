@@ -8,8 +8,9 @@ import {
   Delete
 } from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
-import { FooseListParams } from "@/api/foose_db";
-import { FooseTools } from "@/api/foose_db";
+//import { FooseListParams } from "@/api/foose_db";
+import { FooseListParams } from "@fooseDB/sdk";
+import { FooseTools } from "@/api/foose_db_tools";
 import { ElMessage } from "element-plus";
 import {
   ProductLabelRow,
@@ -65,7 +66,7 @@ const loadPageList = async () => {
     joins: [
       // 一对一关联
       {
-        table: productLabelConfig.table, //必填项（与 sqlite_demo 真实表名一致）
+        table: "foose_product", // ← 关联目标表（不是主表 CONFIG.table！）
         joinType: "left", //"left" | "inner";
         as: "pdt", //关联别名,同一子表多次关联时,需要指定别名,否则会报错
         type: "one", //one（主表→子表，FK 在主表）,many（子表→主表反向查，FK 在子表）
@@ -79,7 +80,7 @@ const loadPageList = async () => {
 
   try {
     const res = await productLabel.getPageList(params);
-    // console.log(res);
+    console.log(res);
     // console.log(res.sql, res.sqlParams);
     // console.log(productLabel.page, productLabel.pageSize, productLabel.total);
   } catch (e) {

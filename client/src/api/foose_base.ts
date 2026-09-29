@@ -39,7 +39,8 @@
  *   - FOOSE_DB_BASE_URL 可通过 VITE_FOOSE_DB_BASE_URL 环境变量覆盖
  *   - 用户名密码硬编码是 demo 项目的简化写法，生产项目应从登录表单 / 路由守卫获取
  */
-import { createFooseClient, type FooseClient } from "@/api/foose_db";
+//import { createFooseClient, type FooseClient } from "@/api/foose_db";
+import { createFooseClient, type FooseClient } from "@fooseDB/sdk";
 
 /* —— 单例 + Promise（防并发重复初始化） —— */
 let instance: FooseClient | null = null;

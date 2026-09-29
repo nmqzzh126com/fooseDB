@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, inject, onMounted, toRaw } from 'vue'
+import { ref, reactive, inject, onMounted, toRaw } from "vue";
 import { ProductTypeRow, useProductType } from "@/api/demo/product_type_api";
 import { ElMessage } from "element-plus";
 
@@ -14,8 +14,7 @@ const props = defineProps({
 const productTypeForm = ref<ProductTypeRow>({
   id: 0,
   type_name: "",
-  flag: 0,
-
+  flag: 0
 } as ProductTypeRow);
 
 onMounted(async () => {
@@ -27,17 +26,20 @@ onMounted(async () => {
   }
 });
 
-
-
 /**
  * 提交数据
  */
 async function submitData() {
   productTypeForm.value.id = Number(productTypeForm.value.id || 0);
   productTypeForm.value.flag = Number(productTypeForm.value.flag);
-  productTypeForm.value.type_name = (productTypeForm.value.type_name || "").trim();
+  productTypeForm.value.type_name = (
+    productTypeForm.value.type_name || ""
+  ).trim();
 
-  if (!productTypeForm.value.type_name || productTypeForm.value.type_name.length === 0) {
+  if (
+    !productTypeForm.value.type_name ||
+    productTypeForm.value.type_name.length === 0
+  ) {
     ElMessage.error("请输入产品类型名称");
     return;
   }
@@ -50,7 +52,7 @@ async function submitData() {
       ElMessage.success("更新成功");
     } else {
       const row: ProductTypeRow = toRaw(productTypeForm.value);
-      delete row.id;//删除id,由数据库自动生成      
+      delete row.id; //删除id,由数据库自动生成
       const newRow = await productType.create(row);
       if (newRow) {
         ElMessage.success("创建成功");
@@ -68,25 +70,46 @@ async function submitData() {
 }
 
 //父组件中的方法
-const handleEditTypeClose = inject<(reload: boolean) => void>("handle-edit-type-close", () => { });
+const handleEditTypeClose = inject<(reload: boolean) => void>(
+  "handle-edit-type-close",
+  () => {}
+);
 </script>
 <template>
   <div>
     <div v-if="productType.errorInfo">{{ productType.errorInfo }}</div>
     <div>
-      <el-form :model="productTypeForm" label-width="120" style="max-width: 100%">
+      <el-form
+        :model="productTypeForm"
+        label-width="120"
+        style="max-width: 100%"
+      >
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="产品类型名称" prop="type_name">
-              <el-input v-model="productTypeForm.type_name" maxlength="50" minlength="2" placeholder="请输入产品类型名称" />
+              <el-input
+                v-model="productTypeForm.type_name"
+                maxlength="50"
+                minlength="2"
+                placeholder="请输入产品类型名称"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="类型状态">
-              <el-switch v-model="productTypeForm.flag" class="ml-2" inline-prompt :active-value="0" :inactive-value="1"
-                style="--el-switch-on-color: #13ce66; --el-switch-off-color: #ff4949" active-text="启用"
-                inactive-text="禁用" />
-
+              <el-switch
+                v-model="productTypeForm.flag"
+                class="ml-2"
+                inline-prompt
+                :active-value="0"
+                :inactive-value="1"
+                style="
+                  --el-switch-on-color: #13ce66;
+                  --el-switch-off-color: #ff4949;
+                "
+                active-text="启用"
+                inactive-text="禁用"
+              />
             </el-form-item>
           </el-col>
         </el-row>

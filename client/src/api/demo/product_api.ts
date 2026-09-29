@@ -3,13 +3,16 @@
  *   // 组件里直接解构（见文件底部完整示例）
  *   const { listResult, loading, getPageList, create, remove } = useProduct();
  */
-import type { FooseRow } from "@/api/foose_db";
-import { createUseFoose } from "@/api/foose_db";
+// import type { FooseRow } from "@/api/foose_db";
+// import { createUseFoose } from "@/api/foose_db";
+import type { FooseRow } from "@fooseDB/sdk";
+import { createUseFoose } from "@fooseDB/sdk";
 import { importFooseClient, DEFAULT_OBJECT_NAME } from "@/api/foose_base";
 
 // ===== 业务类型 =====
 /** 行类型（来自 foose_product 表实际列） */
 export interface ProductRow extends FooseRow {
+  id: number;
   product_type_id: number;
   product_name: string;
   product_count: number;

@@ -1,283 +1,1236 @@
 <script setup lang="ts">
-import { ref, markRaw } from "vue";
-import ReCol from "@/components/ReCol";
-import { useDark, randomGradient } from "./utils";
-import WelcomeTable from "./components/table/index.vue";
-import { ReNormalCountTo } from "@/components/ReCountTo";
-import { useRenderFlicker } from "@/components/ReFlicker";
-import { ChartBar, ChartLine, ChartRound } from "./components/charts";
-import Segmented, { type OptionsType } from "@/components/ReSegmented";
-import { chartData, barChartData, progressData, latestNewsData } from "./data";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { ElMessage } from "element-plus";
+import {
+  createFooseClient,
+  type FooseClient,
+  type FooseListParams,
+  type FooseLastRequest
+} from "@fooseDB/sdk";
 
-defineOptions({
-  name: "Welcome"
-});
+defineOptions({ name: "Welcome" });
 
-const { isDark } = useDark();
-
-let curWeek = ref(1); // 0上周、1本周
-const optionsBasis: Array<OptionsType> = [
+// —— 操作类型枚举 ——
+type Operation = "login" | "list" | "getById" | "create" | "update" | "remove";
+const OPERATIONS: { key: Operation; label: string; desc: string }[] = [
   {
-    label: "上周"
+    key: "login",
+    label: "用户登录",
+    desc: "POST /api/auth/login — 登录认证并获取 token"
   },
   {
-    label: "本周"
-  }
+    key: "list",
+    label: "列表查询",
+    desc: "返回 data[] + meta{total, page, pageSize, totalPages}"
+  },
+  { key: "getById", label: "按 ID 查询", desc: "返回单行数据" },
+  { key: "create", label: "新增", desc: "POST 单行" },
+  { key: "update", label: "更新", desc: "PATCH 单行" },
+  { key: "remove", label: "删除", desc: "DELETE 单行" }
 ];
+
+// —— 状态 ——
+const baseURL = ref(
+  import.meta.env.VITE_FOOSE_DB_BASE_URL ?? "http://127.0.0.1:8858"
+);
+const authRequired = ref(false); // 是否启用认证, 默认不启用
+const username = ref("demo");
+const password = ref("admin123456!@#");
+const fooseClient = ref<FooseClient | null>(null);
+const clientReady = ref(false);
+
+const operation = ref<Operation>("list");
+const objectName = ref("sqlite_demo");
+const tableName = ref("foose_users");
+
+// —— 各操作参数 ——
+const paginationEnabled = ref(true);
+watch(paginationEnabled, enabled => {
+  listParams.noPage = !enabled;
+});
+
+// —— filter JSON 实时解析 ——
+const parseFilterJson = (): {
+  data: Record<string, unknown>;
+  error: string;
+} => {
+  const v = listParams.filterJson.trim();
+  if (!v || v === "{}") return { data: {}, error: "" };
+  try {
+    const parsed = JSON.parse(v);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { data: parsed, error: "" };
+    }
+    return { data: {}, error: "filter 必须是 JSON 对象（{...}）" };
+  } catch (e) {
+    return {
+      data: {},
+      error: e instanceof Error ? e.message : "JSON 解析失败"
+    };
+  }
+};
+
+const listFilter = computed<Record<string, unknown>>(
+  () => parseFilterJson().data
+);
+const filterParseError = computed<string>(() => parseFilterJson().error);
+
+const listParams = reactive<{
+  page: number;
+  pageSize: number;
+  noPage: boolean;
+  showSql: boolean;
+  orderBy: string;
+  filterJson: string;
+}>({
+  page: 1,
+  pageSize: 10,
+  noPage: false,
+  showSql: false,
+  orderBy: "id:desc",
+  filterJson: "{}"
+});
+
+const idInput = ref("");
+const dataJson = ref("{\n  \n}");
+
+// —— 运行状态 ——
+const running = ref(false);
+const lastRequest = ref<string>("");
+const lastHttpRequest = ref<FooseLastRequest | null>(null);
+const lastResponse = ref<string>("");
+const lastError = ref<string>("");
+const lastDurationMs = ref<number>(0);
+const requestDetailCollapsed = ref(true); // 默认折叠，省空间
+
+// —— 计算属性 ——
+const constructedListParams = computed<FooseListParams>(() => {
+  const p: FooseListParams = {
+    noPage: listParams.noPage,
+    orderBy: listParams.orderBy || undefined,
+    showSql: listParams.showSql
+  };
+  if (!listParams.noPage) {
+    p.page = listParams.page;
+    p.pageSize = listParams.pageSize;
+  }
+  if (Object.keys(listFilter.value).length > 0) {
+    p.filter = listFilter.value;
+  }
+  return p;
+});
+
+// —— 登录 ——
+const login = async () => {
+  if (!username.value.trim() || !password.value) {
+    ElMessage.warning("请输入用户名和密码");
+    return;
+  }
+  running.value = true;
+  lastError.value = "";
+  lastResponse.value = "";
+  try {
+    fooseClient.value = await createFooseClient({
+      baseURL: baseURL.value,
+      username: username.value.trim(),
+      password: password.value
+    });
+    clientReady.value = true;
+    // 登录成功 → 把完整 auth info 显示到返回结果
+    const authInfo = fooseClient.value.fooseGetAuthInfo();
+    if (authInfo) {
+      lastResponse.value = JSON.stringify(authInfo, null, 2);
+    }
+    ElMessage.success(`✓ 登录成功（${username.value}）`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    lastError.value = msg;
+    ElMessage.error(`登录失败: ${msg}`);
+  } finally {
+    running.value = false;
+    if (fooseClient.value) {
+      lastHttpRequest.value = fooseClient.value.fooseGetLastRequest();
+    }
+  }
+};
+
+const logout = async () => {
+  const fc = fooseClient.value;
+  lastError.value = "";
+  try {
+    await fc?.fooseLogout();
+    // 登出请求也记录到请求详情 + 返回结果
+    if (fc) {
+      lastHttpRequest.value = fc.fooseGetLastRequest();
+    }
+    lastResponse.value = JSON.stringify(
+      {
+        ok: true,
+        message: "已退出登录",
+        cleared: ["access_token", "refresh_token", "user"]
+      },
+      null,
+      2
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    lastError.value = msg;
+    lastResponse.value = `// 登出请求失败\n${msg}`;
+    if (fc) lastHttpRequest.value = fc.fooseGetLastRequest();
+  }
+  fooseClient.value = null;
+  clientReady.value = false;
+  ElMessage.info("已登出");
+};
+
+// —— 运行当前操作 ——
+const runOperation = async () => {
+  lastError.value = "";
+  lastResponse.value = "";
+
+  // login 操作本身就是认证，跳过前置自动登录
+  if (operation.value !== "login" && !fooseClient.value) {
+    if (authRequired.value) {
+      await login();
+      if (!fooseClient.value) return; // 登录失败
+    } else {
+      try {
+        fooseClient.value = await createFooseClient({
+          baseURL: baseURL.value,
+          username: "",
+          password: ""
+        });
+        clientReady.value = true;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        lastError.value = `认证失败: ${msg}`;
+        ElMessage.error(msg);
+        return;
+      }
+    }
+  }
+
+  const fc = fooseClient.value;
+  const start = performance.now();
+  running.value = true;
+
+  try {
+    let result: unknown;
+
+    switch (operation.value) {
+      case "login": {
+        if (!username.value.trim() || !password.value) {
+          throw new Error("请在上方接口配置区填写用户名和密码");
+        }
+        // 创建匿名 client 作为登录通道（无论成功失败都能拿到请求详情）
+        const tmp = await createFooseClient({
+          baseURL: baseURL.value,
+          username: "",
+          password: ""
+        });
+        fooseClient.value = tmp; // 先占坑，finally 块能抓到请求详情
+        clientReady.value = false;
+
+        const tokenData = await tmp.fooseLogin(
+          username.value.trim(),
+          password.value
+        );
+        clientReady.value = true;
+        lastRequest.value = JSON.stringify(
+          {
+            operation: "fooseLogin",
+            username: username.value.trim(),
+            password: "***(已发送)"
+          },
+          null,
+          2
+        );
+        result = {
+          message: "登录成功",
+          token_type: tokenData.token_type,
+          expires: tokenData.expires,
+          refresh_expires: tokenData.refresh_expires,
+          user: {
+            id: tokenData.user.id,
+            username: tokenData.user.username,
+            nickname: tokenData.user.nickname,
+            roles: tokenData.user.roles
+          }
+        };
+        break;
+      }
+      case "list": {
+        const params = constructedListParams.value;
+        lastRequest.value = JSON.stringify(
+          {
+            operation: "fooseList",
+            object: objectName.value,
+            table: tableName.value,
+            params
+          },
+          null,
+          2
+        );
+        result = await fc.fooseList(objectName.value, tableName.value, params);
+        break;
+      }
+      case "getById": {
+        if (!idInput.value.trim()) throw new Error("请输入 ID");
+        lastRequest.value = JSON.stringify(
+          {
+            operation: "fooseGet",
+            object: objectName.value,
+            table: tableName.value,
+            id: idInput.value
+          },
+          null,
+          2
+        );
+        result = await fc.fooseGet(
+          objectName.value,
+          tableName.value,
+          idInput.value.trim()
+        );
+        break;
+      }
+      case "create": {
+        let data: Record<string, unknown>;
+        try {
+          data = JSON.parse(dataJson.value);
+        } catch {
+          throw new Error("data 不是合法 JSON");
+        }
+        lastRequest.value = JSON.stringify(
+          {
+            operation: "fooseCreate",
+            object: objectName.value,
+            table: tableName.value,
+            data
+          },
+          null,
+          2
+        );
+        result = await fc.fooseCreate(objectName.value, tableName.value, data);
+        break;
+      }
+      case "update": {
+        if (!idInput.value.trim()) throw new Error("请输入 ID");
+        let data: Record<string, unknown>;
+        try {
+          data = JSON.parse(dataJson.value);
+        } catch {
+          throw new Error("data 不是合法 JSON");
+        }
+        lastRequest.value = JSON.stringify(
+          {
+            operation: "fooseUpdate",
+            object: objectName.value,
+            table: tableName.value,
+            id: idInput.value,
+            data
+          },
+          null,
+          2
+        );
+        result = await fc.fooseUpdate(
+          objectName.value,
+          tableName.value,
+          idInput.value.trim(),
+          data
+        );
+        break;
+      }
+      case "remove": {
+        if (!idInput.value.trim()) throw new Error("请输入 ID");
+        lastRequest.value = JSON.stringify(
+          {
+            operation: "fooseRemove",
+            object: objectName.value,
+            table: tableName.value,
+            id: idInput.value
+          },
+          null,
+          2
+        );
+        result = await fc.fooseRemove(
+          objectName.value,
+          tableName.value,
+          idInput.value.trim()
+        );
+        break;
+      }
+    }
+
+    lastDurationMs.value = Math.round((performance.now() - start) * 100) / 100;
+    lastResponse.value = JSON.stringify(result, null, 2);
+    ElMessage.success(`✓ 完成（${lastDurationMs.value} ms）`);
+  } catch (e) {
+    lastDurationMs.value = Math.round((performance.now() - start) * 100) / 100;
+    const msg = e instanceof Error ? e.message : String(e);
+    lastError.value = msg;
+    lastResponse.value = `// 运行错误\n// ${msg}\n\n${lastResponse.value}`;
+    ElMessage.error(`请求失败: ${msg}`);
+  } finally {
+    running.value = false;
+    if (fooseClient.value) {
+      lastHttpRequest.value = fooseClient.value.fooseGetLastRequest();
+    }
+  }
+};
+
+// —— Demo 快捷填充 ——
+const fillFilterDemo = () => {
+  listParams.filterJson = `{
+  "flag": 0,
+  "username[_like]": "demo%"
+}`;
+  listParams.orderBy = "id:desc,username:ASC";
+};
+const fillFilterFull = () => {
+  lastResponse.value = `使用示例:\n  {  
+    "flag": 0,
+    "username[_like]": "demo%",
+    "qty[_gt]": 30,
+  }
+生成 SQL 语句: WHERE flag = 0 AND username LIKE 'demo%' AND qty > 30
+
+支持的运算符:
+  _eq          对应 =               例如:{"status": "paid"}  或 {"status[_eq]": "paid"}
+  _neq         对应 <>              例如:{"status[_neq]": "cancelled"}
+  _gt          对应 >               例如:{"price[_gt]": "100"} 
+  _gte         对应 >=              例如:{"price[_gte]": "50"} 
+  _lt          对应 <               例如:{"price[_lt]": "200"} 
+  _lte         对应 <=              例如:{"price[_lte]": "150"} 
+  _like        对应 LIKE            例如:{"name[_like]": "A%"} (通配符自己写)
+  _nlike       对应 NOT LIKE        例如:{"name[_nlike]": "%delete%"}
+  _contains    对应 LIKE            例如:{"name[_contains]": "Apple"} (自动包:%Apple%)
+  _starts_with 对应 LIKE            例如:{"name[_starts_with]": "Cherry"} (自动包:Cherry%)
+  _ends_with   对应 LIKE            例如:{"name[_ends_with]": "Cake"} (自动包:Cake%)
+  _in          对应 IN              例如:{"status[_in]": "paid,cancelled"}
+  _nin         对应 NOT IN          例如:{"status[_nin]": "draft,cancelled"}
+  _between     对应 BETWEEN a AND b 例如:{"qty[_between]": "20,40"}
+  _null        对应 IS NULL         例如:{"deleted_at[_null]": "true"} 或 {"status[_nnull]": "1"} 或 {"status[_null]": "0"}
+  _nnull       对应 IS NOT NULL     例如:{"status[_nnull]": "1"} 或 {"status[_nnull]": "0"} 或 {"status[_nnull]": "1"}
+
+OR / AND 嵌套
+第一层 OR 分组：_or[idx][field][op],每个 _or[idx] 内部的多字段是 AND，不同 _or[idx] 之间是 OR
+{
+  "_or[0][name][_eq]": "Apple Pie",
+  "_or[0][qty][_lt]": 30,
+  "_or[1][name][_eq]": "Banana Smoothie"
+}
+生成 SQL 语句: WHERE (name = 'Apple Pie' AND qty < 30) OR (name = 'Banana Smoothie')
+
+AND 分组：_and[idx][field][op],显式声明 AND 组（顶层多 key 本身已经是 AND，一般用于嵌套在 OR 内部）
+{
+  "_or[0][_and][0][status][_eq]": "paid",
+  "_or[0][_and][1][qty][_gte]": "45",
+  "_or[1][status][_eq]": "draft"
+}
+生成 SQL 语句: WHERE (status = 'paid' AND qty >= 45) OR (status = 'draft')
+
+完全嵌套示例：
+{
+  "_or[0][_and][0][a][_eq]": "1",
+  "_or[0][_or][0][b][_eq]": "2",
+  "_or[0][_or][1][c][_eq]": "3",
+  "_or[1][d][_eq]": "4"
+}
+索引 [0],[1] 只是排序用的，跳号也无妨，但必须从 0 开始且唯一
+生成 SQL 语句: WHERE (a = 1 AND (b = 2 OR c = 3)) OR d = 4
+
+  `;
+};
+
+const fillCreateDemo = () => {
+  dataJson.value =
+    '{\n  "username": "test_user_' +
+    Date.now() +
+    '",\n  "nickname": "SDK 测试用户",\n  "password": "123456",\n  "flag": 0\n}';
+};
+
+const fillUpdateDemo = () => {
+  idInput.value = "1";
+  dataJson.value = '{\n  "nickname": "更新后的昵称"\n}';
+};
+
+// —— 切换认证开关时自动登出 ——
+watch(authRequired, enabled => {
+  if (!enabled && clientReady.value) {
+    fooseClient.value = null;
+    clientReady.value = false;
+    lastHttpRequest.value = null;
+    lastResponse.value = "";
+    lastError.value = "";
+    ElMessage.info("已关闭认证，自动登出");
+  }
+});
+
+onMounted(() => {
+  // 不自动登录 —— 用户手动点 🔓 登录按钮触发
+});
 </script>
 
 <template>
-  <div>
-    <el-row :gutter="24" justify="space-around">
-      <re-col
-        v-for="(item, index) in chartData"
-        :key="index"
-        v-motion
-        class="mb-4.5"
-        :value="6"
-        :md="12"
-        :sm="12"
-        :xs="24"
-        :initial="{
-          opacity: 0,
-          y: 100
-        }"
-        :enter="{
-          opacity: 1,
-          y: 0,
-          transition: {
-            delay: 80 * (index + 1)
-          }
-        }"
-      >
-        <el-card class="line-card" shadow="never">
-          <div class="flex justify-between">
-            <span class="text-md font-medium">
-              {{ item.name }}
+  <div class="foose-test">
+    <!-- 认证区（全宽，独立一行） -->
+    <div class="panel">
+      <div class="panel-title">🔐 接口配置</div>
+      <el-row :gutter="10">
+        <el-col :span="6">
+          <el-input v-model="baseURL" size="small" placeholder="baseURL">
+            <template #prefix>接口地址&nbsp;&nbsp;</template>
+          </el-input>
+        </el-col>
+        <el-col :span="6">
+          <el-input
+            v-model="objectName"
+            size="small"
+            placeholder="填写接口名称"
+          >
+            <template #prefix>接口名称&nbsp;&nbsp;</template>
+          </el-input>
+        </el-col>
+        <el-col :span="6">
+          <el-input
+            v-model="tableName"
+            size="small"
+            placeholder="填写数据表名称"
+          >
+            <template #prefix>数据表名称&nbsp;&nbsp;</template>
+          </el-input>
+        </el-col>
+        <el-col :span="6">
+          <el-switch
+            v-model="authRequired"
+            inline-prompt
+            style="
+              --el-switch-on-color: #13ce66;
+              --el-switch-off-color: #e6a23c;
+            "
+            active-text="启用认证"
+            inactive-text="匿名模式 (接口需关闭认证)"
+          />
+        </el-col>
+      </el-row>
+      <el-row :gutter="10" align="middle" class="mt-1">
+        <el-col :span="6">
+          <el-input
+            v-model="username"
+            size="small"
+            placeholder="用户名"
+            :disabled="!authRequired"
+          >
+            <template #prefix>用户名&nbsp;&nbsp;</template>
+          </el-input>
+        </el-col>
+        <el-col :span="6">
+          <el-input
+            v-model="password"
+            size="small"
+            placeholder="密码"
+            :disabled="!authRequired"
+            @keyup.enter="runOperation"
+          >
+            <template #prefix>密码&nbsp;&nbsp;</template>
+          </el-input>
+        </el-col>
+        <el-col :span="6">
+          <el-button
+            v-if="!clientReady"
+            type="primary"
+            size="small"
+            :loading="running"
+            @click="login"
+          >
+            登录认证
+          </el-button>
+          <el-button v-else size="small" @click="logout">退出登录</el-button>
+          <el-tag
+            v-if="clientReady"
+            type="success"
+            effect="plain"
+            size="small"
+            class="ml-2"
+          >
+            已登录（{{ username || "匿名" }}）
+          </el-tag>
+          <el-tag
+            v-else-if="authRequired"
+            type="info"
+            effect="plain"
+            size="small"
+            class="ml-2"
+          >
+            未登录
+          </el-tag>
+          <el-tag
+            v-else
+            type="warning"
+            effect="plain"
+            size="small"
+            class="ml-2"
+          >
+            匿名模式
+          </el-tag>
+        </el-col>
+      </el-row>
+    </div>
+    <!-- 主体：左操作区 | 右请求+结果 -->
+    <div class="main-body">
+      <!-- 左侧：操作区 + 请求参数 -->
+      <div class="left-col">
+        <div class="panel op-panel">
+          <div class="panel-title">⚙️ 操作</div>
+          <el-row :gutter="10" align="top">
+            <el-col :span="16">
+              <el-select
+                v-model="operation"
+                size="default"
+                class="w-full"
+                @change="
+                  () => {
+                    lastRequest = '';
+                    lastResponse = '';
+                    lastError = '';
+                    lastHttpRequest = null;
+                  }
+                "
+              >
+                <el-option
+                  v-for="op in OPERATIONS"
+                  :key="op.key"
+                  :label="op.label"
+                  :value="op.key"
+                >
+                  <div class="op-option">
+                    <span class="op-label">{{ op.label }}</span>
+                    <span class="op-desc">{{ op.desc }}</span>
+                  </div>
+                </el-option>
+              </el-select>
+            </el-col>
+            <el-col :span="8">
+              <el-button
+                type="primary"
+                size="small"
+                :loading="running"
+                @click="runOperation"
+              >
+                执行
+              </el-button>
+              <span v-if="lastDurationMs" class="duration-hint">
+                {{ lastDurationMs }} ms
+              </span>
+            </el-col>
+          </el-row>
+
+          <!-- 动态参数区 -->
+          <el-divider class="divider-gap" />
+          <!-- 分页查询参数 -->
+          <div v-if="operation === 'list'" class="op-params-vertical">
+            <el-row :gutter="5">
+              <el-col :span="4">
+                <el-checkbox
+                  v-model="paginationEnabled"
+                  label="分页"
+                  size="small"
+                />
+              </el-col>
+              <el-col :span="10">
+                <el-input-number
+                  v-model="listParams.page"
+                  controls-position="right"
+                  :min="1"
+                  size="small"
+                  style="width: 100%"
+                  :disabled="!paginationEnabled"
+                >
+                  <template #prefix>
+                    <span>当前页 page</span>
+                  </template>
+                </el-input-number>
+              </el-col>
+              <el-col :span="10">
+                <el-input-number
+                  v-model="listParams.pageSize"
+                  controls-position="right"
+                  :min="1"
+                  :max="500"
+                  size="small"
+                  style="width: 100%"
+                  :disabled="!paginationEnabled"
+                >
+                  <template #prefix>
+                    <span>页大小 pageSize</span>
+                  </template>
+                </el-input-number>
+              </el-col>
+            </el-row>
+
+            <el-input
+              v-model="listParams.orderBy"
+              size="small"
+              clearable
+              placeholder="例如: id:desc,name:ASC"
+            >
+              <template #prefix>
+                <span>排序(orderBy)</span>
+              </template>
+            </el-input>
+            <div class="op-params-row">
+              <el-checkbox
+                v-model="listParams.showSql"
+                label="返回 SQL 语句"
+                size="small"
+              />
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                @click="fillFilterDemo"
+              >
+                填充 orderBy和filter 示例
+              </el-button>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                @click="fillFilterFull"
+              >
+                filter 使用说明
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 用户登录参数提示 -->
+          <div v-else-if="operation === 'login'" class="op-params-vertical">
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="登录使用上方『接口配置』面板中的用户名和密码"
+              description="⚠ 登录不使用『接口名称』和『数据表名称』！认证是全局的，业务用户的数据源由后端 .env USER_DS_NAME（默认 sqlite_demo）固定指定。admin 账号（如 admin/admin123）登录后可跨所有项目访问。"
+            />
+          </div>
+
+          <!-- 按 ID 参数 -->
+          <div
+            v-else-if="operation === 'getById' || operation === 'remove'"
+            class="op-params-vertical"
+          >
+            <el-input v-model="idInput" size="default" placeholder="row id" />
+          </div>
+
+          <!-- 更新参数 -->
+          <div v-else-if="operation === 'update'" class="op-params-vertical">
+            <el-input v-model="idInput" size="default" placeholder="row id" />
+            <el-button size="small" text @click="fillUpdateDemo">
+              填充更新示例
+            </el-button>
+          </div>
+
+          <!-- 新增参数 -->
+          <div v-else-if="operation === 'create'" class="op-params-vertical">
+            <el-button size="small" text @click="fillCreateDemo">
+              填充新增示例
+            </el-button>
+          </div>
+
+          <!-- JSON 参数编辑区（filter / data） -->
+          <div
+            v-if="
+              operation === 'list' ||
+              operation === 'create' ||
+              operation === 'update'
+            "
+            class="json-edit-area"
+          >
+            <template v-if="operation === 'list'">
+              <div class="json-label">filter (JSON 对象，空 = 无过滤)</div>
+              <el-input
+                v-model="listParams.filterJson"
+                type="textarea"
+                :rows="6"
+                placeholder='{ "username[_like]": "demo%" }'
+              />
+              <div v-if="filterParseError" class="error-hint">
+                ⚠ JSON 解析错误：{{ filterParseError }}
+              </div>
+              <div
+                v-else-if="listFilter && Object.keys(listFilter).length > 0"
+                class="filter-ok-hint"
+              >
+                ✓ 已解析 {{ Object.keys(listFilter).length }} 个条件
+              </div>
+            </template>
+            <template v-else>
+              <div class="json-label">data (JSON 对象 — 要创建/更新的字段)</div>
+              <el-input
+                v-model="dataJson"
+                type="textarea"
+                :rows="8"
+                placeholder='{ "field1": "value1", "field2": 123 }'
+              />
+            </template>
+          </div>
+        </div>
+        <!-- 请求参数：SDK 调用的原始参数 -->
+        <div class="panel request-params-panel">
+          <div class="panel-title">📤 请求参数</div>
+          <pre
+            class="json-block"
+          ><code>{{ lastRequest || "// 点击 ▶ 运行后显示 SDK 调用参数" }}</code></pre>
+        </div>
+
+        <!-- 请求详情：实际 HTTP 请求的完整信息（可折叠） -->
+        <div class="panel request-detail-panel">
+          <div
+            class="panel-title collapsible"
+            @click="requestDetailCollapsed = !requestDetailCollapsed"
+          >
+            <span>📡 请求详情</span>
+            <span v-if="lastHttpRequest" class="collapse-hint">
+              {{ lastHttpRequest.method }}
+              {{ lastHttpRequest.url.split("?")[0] }}
             </span>
-            <div
-              class="size-8 flex-c rounded-md"
-              :style="{
-                backgroundColor: isDark ? 'transparent' : item.bgColor
+            <el-icon
+              class="collapse-icon"
+              :class="{ expanded: !requestDetailCollapsed }"
+            >
+              <svg viewBox="0 0 1024 1024" width="14" height="14">
+                <path
+                  d="M512 682.667c-8.533 0-17.067-2.134-23.467-8.534L147.2 332.8c-12.8-12.8-12.8-34.133 0-46.933s34.133-12.8 46.933 0L512 601.6l317.867-315.733c12.8-12.8 34.133-12.8 46.933 0s12.8 34.133 0 46.933L535.467 674.133c-6.4 6.4-14.934 8.534-23.467 8.534z"
+                  fill="currentColor"
+                />
+              </svg>
+            </el-icon>
+          </div>
+          <div v-show="!requestDetailCollapsed">
+            <div v-if="lastHttpRequest" class="request-detail">
+              <div class="req-row">
+                <span class="req-label">Method</span>
+                <span
+                  class="req-method"
+                  :class="`method-${lastHttpRequest.method.toLowerCase()}`"
+                >
+                  {{ lastHttpRequest.method }}
+                </span>
+              </div>
+              <div class="req-row">
+                <span class="req-label">URL</span>
+                <span class="req-url">{{ lastHttpRequest.url }}</span>
+              </div>
+              <div v-if="lastHttpRequest.queryString" class="req-row">
+                <span class="req-label">Query</span>
+                <span class="req-url">{{ lastHttpRequest.queryString }}</span>
+              </div>
+              <div class="req-row">
+                <span class="req-label">Headers</span>
+                <pre class="req-headers">{{
+                  JSON.stringify(lastHttpRequest.headers, null, 2)
+                }}</pre>
+              </div>
+              <div v-if="lastHttpRequest.data" class="req-row">
+                <span class="req-label">Body</span>
+                <pre class="req-body">{{ lastHttpRequest.data }}</pre>
+              </div>
+              <div
+                v-if="
+                  lastHttpRequest.rawParams &&
+                  Object.keys(lastHttpRequest.rawParams).length > 0
+                "
+                class="req-row"
+              >
+                <span class="req-label">SDK 参数</span>
+                <pre class="req-body">{{
+                  JSON.stringify(lastHttpRequest.rawParams, null, 2)
+                }}</pre>
+              </div>
+            </div>
+            <div v-else class="req-empty">
+              // 点击 ▶ 运行后显示实际 HTTP 请求详情
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧：返回结果（独占） -->
+      <div class="right-col">
+        <div class="panel result-panel">
+          <div class="panel-title">
+            📥 返回结果
+            <span
+              v-if="lastHttpRequest?.status !== undefined"
+              class="status-badge"
+              :class="{
+                ok: lastHttpRequest.ok,
+                warn:
+                  lastHttpRequest.status >= 400 && lastHttpRequest.status < 500,
+                err:
+                  lastHttpRequest.status >= 500 || lastHttpRequest.status === 0
               }"
             >
-              <IconifyIconOffline
-                :icon="item.icon"
-                :color="item.color"
-                width="18"
-                height="18"
-              />
-            </div>
-          </div>
-          <div class="flex justify-between items-start mt-3">
-            <div class="w-1/2">
-              <ReNormalCountTo
-                :duration="item.duration"
-                :fontSize="'1.6em'"
-                :startVal="100"
-                :endVal="item.value"
-              />
-              <p class="font-medium text-green-500">{{ item.percent }}</p>
-            </div>
-            <ChartLine
-              v-if="item.data.length > 1"
-              class="w-1/2!"
-              :color="item.color"
-              :data="item.data"
-            />
-            <ChartRound v-else class="w-1/2!" />
-          </div>
-        </el-card>
-      </re-col>
-
-      <re-col
-        v-motion
-        class="mb-4.5"
-        :value="18"
-        :xs="24"
-        :initial="{
-          opacity: 0,
-          y: 100
-        }"
-        :enter="{
-          opacity: 1,
-          y: 0,
-          transition: {
-            delay: 400
-          }
-        }"
-      >
-        <el-card class="bar-card" shadow="never">
-          <div class="flex justify-between">
-            <span class="text-md font-medium">分析概览</span>
-            <Segmented v-model="curWeek" :options="optionsBasis" />
-          </div>
-          <div class="flex justify-between items-start mt-3">
-            <ChartBar
-              :requireData="barChartData[curWeek].requireData"
-              :questionData="barChartData[curWeek].questionData"
-            />
-          </div>
-        </el-card>
-      </re-col>
-
-      <re-col
-        v-motion
-        class="mb-4.5"
-        :value="6"
-        :xs="24"
-        :initial="{
-          opacity: 0,
-          y: 100
-        }"
-        :enter="{
-          opacity: 1,
-          y: 0,
-          transition: {
-            delay: 480
-          }
-        }"
-      >
-        <el-card shadow="never">
-          <div class="flex justify-between">
-            <span class="text-md font-medium">解决概率</span>
-          </div>
-          <div
-            v-for="(item, index) in progressData"
-            :key="index"
-            :class="[
-              'flex',
-              'justify-between',
-              'items-start',
-              index === 0 ? 'mt-8' : 'mt-[2.15rem]'
-            ]"
-          >
-            <el-progress
-              :text-inside="true"
-              :percentage="item.percentage"
-              :stroke-width="21"
-              :color="item.color"
-              striped
-              striped-flow
-              :duration="item.duration"
-            />
-            <span class="text-nowrap ml-2 text-text_color_regular text-sm">
-              {{ item.week }}
+              {{ lastHttpRequest.ok ? "✓" : "✗" }}
+              {{ lastHttpRequest.status || "ERR" }}
+            </span>
+            <span
+              v-if="lastHttpRequest?.durationMs !== undefined"
+              class="duration-badge"
+            >
+              ⏱ {{ lastHttpRequest.durationMs }}ms
             </span>
           </div>
-        </el-card>
-      </re-col>
-
-      <re-col
-        v-motion
-        class="mb-4.5"
-        :value="18"
-        :xs="24"
-        :initial="{
-          opacity: 0,
-          y: 100
-        }"
-        :enter="{
-          opacity: 1,
-          y: 0,
-          transition: {
-            delay: 560
-          }
-        }"
-      >
-        <el-card shadow="never">
-          <div class="flex justify-between">
-            <span class="text-md font-medium">数据统计</span>
+          <pre
+            class="json-block"
+            :class="{ error: !!lastError && !lastResponse }"
+          ><code>{{ lastResponse || lastError || "// 暂无结果" }}</code></pre>
+          <div v-if="lastError && lastResponse" class="error-footer">
+            ⚠ {{ lastError }}
           </div>
-          <el-scrollbar max-height="504" class="mt-3">
-            <WelcomeTable />
-          </el-scrollbar>
-        </el-card>
-      </re-col>
-
-      <re-col
-        v-motion
-        class="mb-4.5"
-        :value="6"
-        :xs="24"
-        :initial="{
-          opacity: 0,
-          y: 100
-        }"
-        :enter="{
-          opacity: 1,
-          y: 0,
-          transition: {
-            delay: 640
-          }
-        }"
-      >
-        <el-card shadow="never">
-          <div class="flex justify-between">
-            <span class="text-md font-medium">最新动态</span>
-          </div>
-          <el-scrollbar max-height="504" class="mt-3">
-            <el-timeline>
-              <el-timeline-item
-                v-for="(item, index) in latestNewsData"
-                :key="index"
-                center
-                placement="top"
-                :icon="
-                  markRaw(
-                    useRenderFlicker({
-                      background: randomGradient({
-                        randomizeHue: true
-                      })
-                    })
-                  )
-                "
-                :timestamp="item.date"
-              >
-                <p class="text-text_color_regular text-sm">
-                  {{
-                    `新增 ${item.requiredNumber} 条问题，${item.resolveNumber} 条已解决`
-                  }}
-                </p>
-              </el-timeline-item>
-            </el-timeline>
-          </el-scrollbar>
-        </el-card>
-      </re-col>
-    </el-row>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
-:deep(.el-card) {
-  --el-card-border-color: none;
+.foose-test {
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  height: calc(100vh - 150px);
+}
 
-  /* 解决概率进度条宽度 */
-  .el-progress--line {
-    width: 85%;
+.panel {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 5px;
+  padding: 10px 15px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin-bottom: 3px;
+  letter-spacing: 0.5px;
+}
+
+.main-body {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.left-col {
+  width: 500px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow: auto;
+}
+
+.right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.op-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.request-params-panel {
+  flex-shrink: 0;
+}
+
+.request-detail-panel {
+  flex-shrink: 0;
+}
+
+.result-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.small-label {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.ml-2 {
+  margin-left: 8px;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.op-option {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.op-label {
+  font-weight: 500;
+}
+.op-desc {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.divider-gap {
+  margin: 12px 0;
+}
+
+.op-params-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.op-params-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.label-sm {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin: 0 2px;
+}
+
+.json-edit-area {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.json-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.error-hint {
+  font-size: 12px;
+  color: var(--el-color-warning);
+}
+
+.filter-ok-hint {
+  font-size: 12px;
+  color: var(--el-color-success);
+}
+
+.run-bar {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.duration-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.json-block {
+  margin: 0;
+  padding: 12px;
+  background: #1e1e1e;
+  border-radius: 6px;
+  overflow: auto;
+  font-family: "Consolas", "Monaco", "Fira Code", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #d4d4d4;
+  flex: 1;
+  min-height: 0;
+
+  &.half-height {
+    max-height: none;
   }
 
-  /* 解决概率进度条字体大小 */
-  .el-progress-bar__innerText {
-    font-size: 15px;
+  &.error {
+    color: #f56c6c;
   }
 
-  /* 隐藏 el-scrollbar 滚动条 */
-  .el-scrollbar__bar {
-    display: none;
-  }
-
-  /* el-timeline 每一项上下、左右边距 */
-  .el-timeline-item {
-    margin: 0 6px;
+  code {
+    white-space: pre;
   }
 }
 
-:deep(.el-timeline.is-start) {
-  padding-left: 0;
+.error-footer {
+  margin-top: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+  border-radius: 4px;
 }
 
-.main-content {
-  margin: 20px 20px 0 !important;
+/* —— Status / Duration Badges（panel-title 内联） —— */
+.status-badge,
+.duration-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 10px;
+  margin-left: 8px;
+  font-family: "Consolas", "Monaco", monospace;
+  letter-spacing: 0.5px;
+}
+.status-badge.ok {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+.status-badge.warn {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+.status-badge.err {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+}
+.duration-badge {
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+}
+
+/* —— 请求详情面板样式 —— */
+.request-detail-panel {
+  flex-shrink: 0;
+}
+
+.panel-title.collapsible {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.collapse-hint {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  font-family: "Consolas", "Monaco", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+}
+
+.collapse-icon {
+  margin-left: auto;
+  color: var(--el-text-color-secondary);
+  transition: transform 0.2s ease;
+
+  &.expanded {
+    transform: rotate(180deg);
+  }
+}
+
+.request-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: "Consolas", "Monaco", "Fira Code", monospace;
+  font-size: 12px;
+}
+
+.req-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.req-label {
+  flex-shrink: 0;
+  width: 60px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  padding-top: 2px;
+}
+
+.req-method {
+  font-weight: 700;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+
+  &.method-get {
+    background: var(--el-color-success-light-9);
+    color: var(--el-color-success);
+  }
+  &.method-post {
+    background: var(--el-color-primary-light-9);
+    color: var(--el-color-primary);
+  }
+  &.method-patch {
+    background: var(--el-color-warning-light-9);
+    color: var(--el-color-warning);
+  }
+  &.method-delete {
+    background: var(--el-color-danger-light-9);
+    color: var(--el-color-danger);
+  }
+  &.method-put {
+    background: var(--el-color-info-light-9);
+    color: var(--el-color-info);
+  }
+}
+
+.req-url {
+  color: var(--el-color-primary);
+  word-break: break-all;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.req-headers,
+.req-body {
+  margin: 0;
+  padding: 6px 8px;
+  background: #1e1e1e;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ce9178;
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+}
+
+.req-body {
+  color: #dcdcaa;
+}
+
+.req-empty {
+  color: var(--el-text-color-placeholder);
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: 12px;
 }
 </style>

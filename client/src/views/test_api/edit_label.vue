@@ -2,7 +2,7 @@
 import { ref, reactive, inject, onMounted, toRaw } from "vue";
 import { ElMessage } from "element-plus";
 import { ProductLabelRow, useProductLabel } from "@/api/demo/product_label_api";
-import { FooseTools } from "@/api/foose_db";
+import { FooseTools } from "@/api/foose_db_tools";
 
 const productLabel = reactive(useProductLabel());
 
@@ -33,7 +33,7 @@ onMounted(async () => {
  * 提交数据
  */
 async function submitData() {
-  productLabelForm.value.id = productLabelForm.value.id || 0;
+  productLabelForm.value.my_id = productLabelForm.value.my_id || "";
   productLabelForm.value.flag = Number(productLabelForm.value.flag);
   productLabelForm.value.title = (productLabelForm.value.title || "").trim();
 

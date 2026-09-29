@@ -1,8 +1,11 @@
 /**
  * foose_product_type 表业务 API  
  */
-import type { FooseRow } from "@/api/foose_db";
-import { createUseFoose } from "@/api/foose_db";
+// import type { FooseRow } from "@/api/foose_db";
+// import { createUseFoose } from "@/api/foose_db";
+import type { FooseRow } from "@fooseDB/sdk";
+import { createUseFoose } from "@fooseDB/sdk";
+
 import { importFooseClient, DEFAULT_OBJECT_NAME } from "@/api/foose_base";
 
 // ===== 业务类型 =====

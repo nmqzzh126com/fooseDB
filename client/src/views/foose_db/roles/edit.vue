@@ -20,7 +20,7 @@ const {
 } = useRole();
 import { ElMessage, ElMessageBox, FormInstance } from "element-plus";
 import { CircleCheck, CircleClose } from "@element-plus/icons-vue";
-import { FooseTools } from "@/api/foose_db";
+import { FooseTools } from "@/api/foose_db_tools";
 
 const props = defineProps({
   roleId: {

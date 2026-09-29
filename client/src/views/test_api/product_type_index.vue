@@ -8,7 +8,8 @@ import {
   Delete
 } from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
-import { FooseListParams } from "@/api/foose_db";
+//import type { FooseListParams } from "@/api/foose_db";
+import type { FooseListParams } from "@fooseDB/sdk";
 import { ElMessage } from "element-plus";
 import { ProductTypeRow, useProductType } from "@/api/demo/product_type_api";
 

@@ -351,7 +351,7 @@ export async function list(
     const rows = await queryWithSql<Record<string, unknown>>(ds, mainSql, mainParams);
     const nested = useJoins ? nestJoinedResults(rows, joinList, schema.primaryKey) : rows;
     const result: ListResponse = {
-      data: nested,
+      data: maskPasswordOnRead(nested),
       meta: { mode: "nopage", nopageLimit }
     };
     if (params.showSql) {

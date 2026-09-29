@@ -47,6 +47,7 @@
     "url": "https://github.com/xiaoxian521"
   },
   "dependencies": {
+    "@fooseDB/sdk": "file:../sdk",
     "@amap/amap-jsapi-loader": "^1.0.1",
     "@howdyjs/mouse-menu": "^2.1.7",
     "@infectoone/vue-ganttastic": "^2.3.2",
