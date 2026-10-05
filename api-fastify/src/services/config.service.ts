@@ -59,6 +59,9 @@ export interface ObjectRow {
   auth_required: number;
   enabled: number;
   debug: number;
+  allow_upload_file: number;
+  allow_download_file: number;
+  allow_delete_file: number;
   created_at: number;
 }
 
@@ -102,7 +105,8 @@ export const CONFIG_GUARDED_TABLES = new Set([
   "object_table",
   "users",
   "query_template",
-  "custom_query_log"
+  "custom_query_log",
+  "object_files"
 ]);
 
 /**
@@ -115,7 +119,7 @@ export const CONFIG_GUARDED_TABLES = new Set([
  * 新增顶级静态 /api/<name>/ 路径时，记得把 name 加入此 Set，否则先注册的通用动态路由 /api/:object/:table
  * 会把它当 object 解析，静态路由 404。
  */
-const RESERVED_OBJECT_NAMES = new Set(["config", "auth", "users", "custom"]);
+const RESERVED_OBJECT_NAMES = new Set(["config", "auth", "users", "custom", "files"]);
 
 function assertIdentifier(value: string, label: string): void {
   if (!IDENT_RE.test(value)) {
@@ -179,6 +183,9 @@ export async function createObject(input: {
   auth_required?: number;
   enabled?: number;
   debug?: number;
+  allow_upload_file?: number;
+  allow_download_file?: number;
+  allow_delete_file?: number;
 }): Promise<ObjectRow> {
   assertIdentifier(input.name, "项目名称");
   if (RESERVED_OBJECT_NAMES.has(input.name.toLowerCase())) {
@@ -193,11 +200,14 @@ export async function createObject(input: {
   const cse = input.custom_sql_enabled ? 1 : 0;
   const enabled = input.enabled === undefined ? 1 : input.enabled ? 1 : 0;
   const debug = input.debug ? 1 : 0;
+  const allowUpload = input.allow_upload_file ? 1 : 0;
+  const allowDownload = input.allow_download_file ? 1 : 0;
+  const allowDelete = input.allow_delete_file ? 1 : 0;
   try {
     const info = getDb()
       .prepare(
-        `INSERT INTO object(name, description, db_type, db_url, db_path, cors_origins, cors_methods, custom_sql_enabled, auth_required, enabled, debug)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO object(name, description, db_type, db_url, db_path, cors_origins, cors_methods, custom_sql_enabled, auth_required, enabled, debug, allow_upload_file, allow_download_file, allow_delete_file)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         input.name,
@@ -210,7 +220,10 @@ export async function createObject(input: {
         cse,
         auth,
         enabled,
-        debug
+        debug,
+        allowUpload,
+        allowDownload,
+        allowDelete
       );
     const row = getObject(Number(info.lastInsertRowid));
     // 动态注册数据源
@@ -237,6 +250,9 @@ export async function updateObject(
     auth_required?: number;
     enabled?: number;
     debug?: number;
+    allow_upload_file?: number;
+    allow_download_file?: number;
+    allow_delete_file?: number;
   }
 ): Promise<ObjectRow> {
   const cur = getObject(id);
@@ -267,7 +283,10 @@ export async function updateObject(
         custom_sql_enabled = COALESCE(?, custom_sql_enabled),
         auth_required = COALESCE(?, auth_required),
         enabled = COALESCE(?, enabled),
-        debug = COALESCE(?, debug)
+        debug = COALESCE(?, debug),
+        allow_upload_file = COALESCE(?, allow_upload_file),
+        allow_download_file = COALESCE(?, allow_download_file),
+        allow_delete_file = COALESCE(?, allow_delete_file)
       WHERE id = ?`
     )
     .run(
@@ -281,6 +300,9 @@ export async function updateObject(
       input.auth_required === undefined ? null : input.auth_required ? 1 : 0,
       input.enabled === undefined ? null : input.enabled ? 1 : 0,
       input.debug === undefined ? null : input.debug ? 1 : 0,
+      input.allow_upload_file === undefined ? null : input.allow_upload_file ? 1 : 0,
+      input.allow_download_file === undefined ? null : input.allow_download_file ? 1 : 0,
+      input.allow_delete_file === undefined ? null : input.allow_delete_file ? 1 : 0,
       id
     );
   const updated = getObject(id);

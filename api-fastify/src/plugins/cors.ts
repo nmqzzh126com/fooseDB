@@ -70,6 +70,20 @@ function resolveObjectCors(url: string): ObjectCorsRow | null {
       return null;
     }
   }
+
+  // /api/files/<object>/... —— 文件路由，第二段才是真实 object 名
+  const mFiles = path.match(/^\/api\/files\/([a-zA-Z0-9_]+)(?:\/|$)/);
+  if (mFiles) {
+    try {
+      const row = getDb()
+        .prepare("SELECT cors_origins, cors_methods FROM object WHERE name = ?")
+        .get(mFiles[1]) as ObjectCorsRow | undefined;
+      return row ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   // /api/<object>/<table>/...
   const m = path.match(/^\/api\/([a-zA-Z0-9_]+)\//);
   if (!m) return null;

@@ -572,6 +572,194 @@ export async function getOne(
 }
 
 /**
+ * 根据 filter 查询条件返回单个字段的值（第一行）。
+ * - 字段必须在 schema 中存在（防 SQL 注入）
+ * - 无匹配行时返回 null（不抛 404，与 getOne 行为不同）
+ * - 返回值保持数据库原始类型（number / string / boolean / null）
+ *
+ * 用途：SELECT field FROM table WHERE ... LIMIT 1 的场景，
+ *       比 getOne + fields 更轻量，响应体就是裸值。
+ */
+export async function getValue(
+  dsName: string,
+  table: string,
+  fieldName: string,
+  query: Record<string, string>
+): Promise<unknown> {
+  const ds = getDs(dsName);
+  const schema = await discoverSchema(ds, table);
+  const dsType = ds.type;
+  const tbl = quoteId(table, dsType);
+
+  // 字段存在性校验（防止 SQL 注入）
+  const col = schema.columns.find(
+    c => c.name === fieldName || c.name.toLowerCase() === fieldName.toLowerCase()
+  );
+  if (!col) {
+    throw new BusinessError(
+      400,
+      `字段 "${fieldName}" 不存在于表 "${table}"`
+    );
+  }
+  const colSql = quoteId(col.name, dsType);
+
+  const whereQ = whereQueryWithoutAggregate(query);
+  const { clause, params } = buildFilterFromQuery(
+    whereQ,
+    schema,
+    dsType,
+    RESERVED
+  );
+  if (!clause) {
+    throw new BusinessError(400, "至少需要一个查询条件");
+  }
+
+  const rows = await queryWithSql<Record<string, unknown>>(ds,
+    `SELECT ${colSql} AS v FROM ${tbl} WHERE ${clause} LIMIT 1`,
+    params
+  );
+
+  if (rows.length === 0) return null;
+  const raw = rows[0].v;
+
+  // password 列自动脱敏
+  if (col.name.toLowerCase() === "password" && raw != null) {
+    return "";
+  }
+  return raw;
+}
+
+/**
+ * 根据 filter 对 number 字段做原子自增 (inc) / 自减 (dec)。
+ *
+ * SQL 等价：UPDATE t SET col1 = col1 + ?, col2 = col2 - ? WHERE <filter>
+ *
+ * - filter 匹配多行 → 全部更新，changed 返回受影响行数
+ * - 字段必须在 schema 中存在且类型为 number/int/real/float/double/decimal
+ * - 操作值必须是有限的非零 number
+ * - delayMs > 0 时先 await sleep 再执行（用于前端演示延迟效果）
+ * - 返回更新后的所有匹配行（数组）
+ */
+export async function incDec(
+  dsName: string,
+  table: string,
+  body: {
+    inc?: Record<string, number>;
+    dec?: Record<string, number>;
+  },
+  query: Record<string, string>,
+  delayMs = 0
+): Promise<{
+  ok: true;
+  changed: number;
+  rows: Record<string, unknown>[];
+}> {
+  // —— 0. delay 先 sleep（越晚执行越不占连接）——
+  if (delayMs > 0) {
+    await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+  }
+
+  const ds = getDs(dsName);
+  const schema = await discoverSchema(ds, table);
+  const dsType = ds.type;
+  const tbl = quoteId(table, dsType);
+
+  // —— 1. 合并 inc + dec，统一成 { col: signedDelta } ——
+  const ops = new Map<string, number>();
+  for (const [op, sign] of [["inc", 1], ["dec", -1]] as const) {
+    const obj = body[op];
+    if (!obj) continue;
+    for (const [col, val] of Object.entries(obj)) {
+      if (val === 0) continue;
+      if (!Number.isFinite(val as number)) {
+        throw new BusinessError(
+          400,
+          `${op}.${col} 的值必须是有限的数字`
+        );
+      }
+      const prev = ops.get(col) ?? 0;
+      ops.set(col, prev + sign * (val as number));
+    }
+  }
+  if (ops.size === 0) {
+    throw new BusinessError(400, "inc 和 dec 至少要有一个字段");
+  }
+
+  // —— 2. 字段校验：存在性 + 类型 ——
+  for (const col of ops.keys()) {
+    const c = schema.columns.find(ci => ci.name === col);
+    if (!c) {
+      throw new BusinessError(400, `字段 "${col}" 不存在于表 "${table}"`);
+    }
+    // SQLite type 大小写混乱，统一大写后 includes 判断
+    const t = (c.type ?? "").toUpperCase();
+    const isNumber =
+      t.includes("INT") ||
+      t.includes("REAL") ||
+      t.includes("FLOAT") ||
+      t.includes("DOUBLE") ||
+      t.includes("DECIMAL") ||
+      t.includes("NUMERIC") ||
+      t.includes("NUMBER");
+    if (!isNumber) {
+      throw new BusinessError(
+        400,
+        `字段 "${col}" 类型 "${c.type}" 不是数值型，无法自增/自减`
+      );
+    }
+  }
+
+  // —— 3. WHERE 条件 ——
+  const whereQ = whereQueryWithoutAggregate(query);
+  const { clause, params } = buildFilterFromQuery(
+    whereQ,
+    schema,
+    dsType,
+    RESERVED
+  );
+  if (!clause) {
+    throw new BusinessError(400, "至少需要一个查询条件来定位要更新的行");
+  }
+
+  // —— 4. SET 子句 + 参数 ——
+  const setSqlParts: string[] = [];
+  const setParams: number[] = [];
+  for (const [col, delta] of ops) {
+    const safeCol = quoteId(col, dsType);
+    if (delta >= 0) {
+      setSqlParts.push(`${safeCol} = ${safeCol} + ?`);
+      setParams.push(delta);
+    } else {
+      setSqlParts.push(`${safeCol} = ${safeCol} - ?`);
+      setParams.push(-delta);
+    }
+  }
+
+  // —— 5. 事务执行 UPDATE + 回查 ——
+  const allParams = [...setParams, ...params];
+  const result = await ds.run(
+    `UPDATE ${tbl} SET ${setSqlParts.join(", ")} WHERE ${clause}`,
+    allParams
+  );
+  const changed = result.changes ?? 0;
+
+  if (changed === 0) {
+    return { ok: true, changed: 0, rows: [] };
+  }
+
+  // —— 6. 回查最新行（同 WHERE，支持密码脱敏）——
+  const rows = await queryWithSql<Record<string, unknown>>(ds,
+    `SELECT * FROM ${tbl} WHERE ${clause}`,
+    params
+  );
+  return {
+    ok: true,
+    changed,
+    rows: rows.map(r => maskPasswordOnRead(r))
+  };
+}
+
+/**
  * 插入一行（只接受 schema 中存在的列）。
  * 返回完整的新行数据（以数据库实际写入值为准，包括自增主键、UUID 函数、默认值等）。
  *   如果传了 fieldsCSV，则在 SELECT 阶段只选取指定列（schema 白名单校验）。

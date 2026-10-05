@@ -48,6 +48,8 @@ import {
   list,
   getById,
   getOne,
+  getValue,
+  incDec,
   insertRow,
   updateRow,
   deleteRow,
@@ -176,6 +178,33 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     }
   });
 
+  // GET /api/:object/:table/value/:field — 按 filter 查单个字段值（第一行，保持原始类型）
+  // 必须在 /:id 之前注册，Fastify 按 specificity 匹配，value 是固定段优先于参数段
+  fastify.get<{
+    Params: { object: string; table: string; field: string };
+    Querystring: Record<string, unknown>;
+  }>("/api/:object/:table/value/:field", async (request, reply) => {
+    const { object, table, field } = request.params;
+    try {
+      const access = await resolveObjectAccess(object, table, "select", {
+        token: request.authContext.bearerToken,
+        fingerprint: request.authContext.fingerprint
+      });
+      const q: Record<string, string> = {};
+      for (const [k, v] of Object.entries(request.query)) {
+        q[k] = v == null ? "" : String(v);
+      }
+      const val = await getValue(access.dsName, table, field, q);
+      // 用 JSON 序列化裸值 —— reply.send(string) 会输出纯文本，
+      // 但 SDK 和前端都期望能 response.json() 解析的值
+      reply.header("Content-Type", "application/json; charset=utf-8");
+      return reply.send(JSON.stringify(val));
+    } catch (e) {
+      if (e instanceof BusinessError) return reply.code(e.statusCode).send({ error: e.message });
+      throw e;
+    }
+  });
+
   // GET /api/:object/:table/:id — 按主键查一行（?fields + ?join）
   fastify.get<{
     Params: { object: string; table: string; id: string };
@@ -255,6 +284,54 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
         fingerprint: request.authContext.fingerprint
       });
       return reply.send(await deleteRow(access.dsName, table, id));
+    } catch (e) {
+      if (e instanceof BusinessError) return reply.code(e.statusCode).send({ error: e.message });
+      throw e;
+    }
+  });
+
+  // POST /api/:object/:table/inc-dec — 根据 filter 对 number 字段原子自增/自减
+  // Body: { inc: { field: n, ... }, dec: { field: n, ... } }  默认 ±1
+  // Query: delay=ms（可选，延迟执行）+ 任意 Directus 风格 filter 条件
+  fastify.post<{
+    Params: { object: string; table: string };
+    Body: {
+      inc?: Record<string, number>;
+      dec?: Record<string, number>;
+    };
+    Querystring: Record<string, unknown>;
+  }>("/api/:object/:table/inc-dec", async (request, reply) => {
+    const { object, table } = request.params;
+    try {
+      const access = await resolveObjectAccess(object, table, "update", {
+        token: request.authContext.bearerToken,
+        fingerprint: request.authContext.fingerprint
+      });
+      const q: Record<string, string> = {};
+      for (const [k, v] of Object.entries(request.query)) {
+        q[k] = v == null ? "" : String(v);
+      }
+      // delay 从 query 中提取（毫秒），其他保留给 filter
+      let delayMs = 0;
+      if (q.delay) {
+        const d = parseInt(q.delay, 10);
+        if (!Number.isFinite(d) || d < 0) {
+          return reply.code(400).send({
+            error: "delay 必须是非负整数（毫秒）"
+          });
+        }
+        delayMs = Math.min(d, 30_000); // 上限 30s
+        delete q.delay;
+      }
+
+      const result = await incDec(
+        access.dsName,
+        table,
+        request.body ?? {},
+        q,
+        delayMs
+      );
+      return reply.send(result);
     } catch (e) {
       if (e instanceof BusinessError) return reply.code(e.statusCode).send({ error: e.message });
       throw e;

@@ -25,7 +25,10 @@ export const CreateObjectSchema = {
     custom_sql_enabled: FLAG,
     auth_required: FLAG,
     enabled: FLAG,
-    debug: FLAG
+    debug: FLAG,
+    allow_upload_file: FLAG,
+    allow_download_file: FLAG,
+    allow_delete_file: FLAG
   }
 } as const;
 
@@ -43,7 +46,10 @@ export const UpdateObjectSchema = {
     custom_sql_enabled: FLAG,
     auth_required: FLAG,
     enabled: FLAG,
-    debug: FLAG
+    debug: FLAG,
+    allow_upload_file: FLAG,
+    allow_download_file: FLAG,
+    allow_delete_file: FLAG
   }
 } as const;
 

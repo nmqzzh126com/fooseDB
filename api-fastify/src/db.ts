@@ -165,6 +165,9 @@ export async function initDb(db?: Database.Database): Promise<void> {
       auth_required       INTEGER NOT NULL DEFAULT 0,        -- 调用接口是否先进行 auth 认证（0=默认不开启 1=开启）
       enabled             INTEGER NOT NULL DEFAULT 1,         -- 项目启用/禁用（0=禁用，拒绝所有请求；1=启用）
       debug               INTEGER NOT NULL DEFAULT 0,         -- 是否开启接口调试日志（0=关闭 1=开启；开启后接口请求/响应记录到 Redis）
+      allow_upload_file   INTEGER NOT NULL DEFAULT 0,         -- 是否允许文件上传（0=关闭 1=开启）
+      allow_download_file INTEGER NOT NULL DEFAULT 0,         -- 是否允许文件下载（0=关闭 1=开启）
+      allow_delete_file   INTEGER NOT NULL DEFAULT 0,         -- 是否允许文件删除（0=关闭 1=开启）
       created_at          INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
     );
 
@@ -246,6 +249,27 @@ export async function initDb(db?: Database.Database): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_rt_uid  ON refresh_tokens(user_id);
     CREATE INDEX IF NOT EXISTS idx_rt_fam  ON refresh_tokens(family_id);
     CREATE INDEX IF NOT EXISTS idx_rt_jti  ON refresh_tokens(jwt_id);
+
+    -- ================================================
+    -- object_files：上传文件元数据（所有项目共用）
+    -- ================================================
+    CREATE TABLE IF NOT EXISTS object_files (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      object_id     INTEGER NOT NULL,                     -- 关联的项目 ID
+      object_name   TEXT NOT NULL,                        -- 项目名称（冗余，方便路径构建）
+      foldername    TEXT NOT NULL,                        -- 文件夹名（- 分隔最多 3 层）
+      original_name TEXT NOT NULL,                        -- 原始文件名
+      stored_name   TEXT NOT NULL,                        -- 存储文件名 (uuid.ext)
+      file_path     TEXT NOT NULL,                        -- 相对路径 uploads/<object>/<folder>/<stored>
+      file_size     INTEGER NOT NULL,                     -- 文件大小（字节）
+      mime_type     TEXT,                                 -- MIME 类型
+      file_ext      TEXT,                                 -- 扩展名（不含 .）
+      uploaded_by   INTEGER,                             -- 上传者用户 ID（匿名为 NULL）
+      uploaded_ip   TEXT,                                 -- 上传者 IP
+      created_at    INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
+    );
+    CREATE INDEX IF NOT EXISTS idx_obj_files_obj    ON object_files(object_id);
+    CREATE INDEX IF NOT EXISTS idx_obj_files_folder ON object_files(object_id, foldername);
   `);
 
   // —— migration：refresh_tokens 加 ds 列 + 索引（支持跨数据源业务用户 token）——
@@ -359,7 +383,10 @@ export async function initDb(db?: Database.Database): Promise<void> {
     ["cors_methods", "TEXT"],
     ["custom_sql_enabled", "INTEGER NOT NULL DEFAULT 0"],
     ["enabled", "INTEGER NOT NULL DEFAULT 1"],
-    ["debug", "INTEGER NOT NULL DEFAULT 0"]
+    ["debug", "INTEGER NOT NULL DEFAULT 0"],
+    ["allow_upload_file", "INTEGER NOT NULL DEFAULT 0"],
+    ["allow_download_file", "INTEGER NOT NULL DEFAULT 0"],
+    ["allow_delete_file", "INTEGER NOT NULL DEFAULT 0"]
   ] as const;
   let needMigration = false;
   for (const [col, typeDef] of newCols) {
@@ -542,7 +569,8 @@ export async function initDb(db?: Database.Database): Promise<void> {
       "custom_query_log",
       "posts",
       "refresh_tokens",
-      "refresh_tokens_expired"
+      "refresh_tokens_expired",
+      "object_files"
     ]);
 
     const insRule = d.prepare(
