@@ -28,7 +28,8 @@ export const CreateObjectSchema = {
     debug: FLAG,
     allow_upload_file: FLAG,
     allow_download_file: FLAG,
-    allow_delete_file: FLAG
+    allow_delete_file: FLAG,
+    allow_list_file: FLAG
   }
 } as const;
 
@@ -49,7 +50,8 @@ export const UpdateObjectSchema = {
     debug: FLAG,
     allow_upload_file: FLAG,
     allow_download_file: FLAG,
-    allow_delete_file: FLAG
+    allow_delete_file: FLAG,
+    allow_list_file: FLAG
   }
 } as const;
 

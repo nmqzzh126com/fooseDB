@@ -14,6 +14,9 @@ importers:
       '@element-plus/icons-vue':
         specifier: ^2.3.2
         version: 2.3.2(vue@3.5.41(typescript@6.0.3))
+      '@fooseDB/sdk':
+        specifier: file:../api-fastify/sdk
+        version: file:../api-fastify/sdk(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(vue@3.5.41(typescript@6.0.3))
       '@howdyjs/mouse-menu':
         specifier: ^2.1.7
         version: 2.1.7(vue@3.5.41(typescript@6.0.3))
@@ -1234,6 +1237,14 @@ packages:
 
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
+
+  '@fooseDB/sdk@file:../api-fastify/sdk':
+    resolution: {directory: ../api-fastify/sdk, type: directory}
+    peerDependencies:
+      vue: ^3.0.0
+    peerDependenciesMeta:
+      vue:
+        optional: true
 
   '@howdyjs/mouse-menu@2.1.7':
     resolution: {integrity: sha512-i1b8Y0saAlDKsT1i/awB5+fqHaIhjV3ti8LbEput3dM6h8ZxbCJ7l9L3FmbAG/HJ/OBH7RQjIBRWv1ioWcV6vQ==}
@@ -5981,6 +5992,15 @@ snapshots:
       '@floating-ui/utils': 0.2.12
 
   '@floating-ui/utils@0.2.12': {}
+
+  '@fooseDB/sdk@file:../api-fastify/sdk(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)(vue@3.5.41(typescript@6.0.3))':
+    dependencies:
+      axios: 1.18.1(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+    optionalDependencies:
+      vue: 3.5.41(typescript@6.0.3)
+    transitivePeerDependencies:
+      - debug
+      - supports-color
 
   '@howdyjs/mouse-menu@2.1.7(vue@3.5.41(typescript@6.0.3))':
     dependencies:

@@ -361,6 +361,10 @@ export interface ObjectDef {
   custom_sql_enabled?: 0 | 1; // 是否允许 /api/custom/*
   enabled: 0 | 1; // 项目启用/禁用（0=禁用，拒绝所有请求）
   debug: 0 | 1; // 0=关闭调试日志；1=开启（接口请求/响应写入 Redis，最近 1000 条）
+  allow_upload_file: 0 | 1; // 是否允许上传文件
+  allow_download_file: 0 | 1; // 是否允许下载文件
+  allow_delete_file: 0 | 1; // 是否允许删除文件
+  allow_list_file: 0 | 1; // 是否允许列出文件
   created_at?: number;
   _user_count?: number;// 项目下用户数--虚拟字段
   _table_count?: number;// 项目下表数--虚拟字段

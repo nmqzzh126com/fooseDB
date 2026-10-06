@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { defineAsyncComponent, onMounted, provide, ref, reactive } from "vue";
 import {
   Edit,
@@ -8,9 +8,9 @@ import {
   Delete
 } from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
-//import { FooseListParams } from "@/api/foose_db";
+//import { FooseListParams } from "@fooseDB/sdk";
 import { FooseListParams } from "@fooseDB/sdk";
-import { FooseTools } from "@/api/foose_db_tools";
+import { FooseTools } from "@fooseDB/sdk";
 import { ElMessage } from "element-plus";
 import {
   ProductLabelRow,

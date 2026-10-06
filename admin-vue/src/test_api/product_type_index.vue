@@ -1,14 +1,8 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { defineAsyncComponent, onMounted, provide, ref, reactive } from "vue";
-import {
-  Edit,
-  Search,
-  Refresh,
-  CirclePlus,
-  Delete
-} from "@element-plus/icons-vue";
+import { Edit, Search, Refresh, CirclePlus, Delete } from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
-//import type { FooseListParams } from "@/api/foose_db";
+//import type { FooseListParams } from "@fooseDB/sdk";
 import type { FooseListParams } from "@fooseDB/sdk";
 import { ElMessage } from "element-plus";
 import { ProductTypeRow, useProductType } from "@/api/demo/product_type_api";
@@ -174,25 +168,15 @@ async function handleFlag(rowId: number, flag: number) {
           @click="debounceLoadList"
           >查询</el-button
         >
-        <el-button :icon="Refresh" type="info" @click="handleResetQuery"
-          >重置</el-button
-        >
-        <el-button :icon="CirclePlus" type="success" @click="handleAdd"
-          >添加</el-button
-        >
+        <el-button :icon="Refresh" type="info" @click="handleResetQuery">重置</el-button>
+        <el-button :icon="CirclePlus" type="success" @click="handleAdd">添加</el-button>
 
         <el-text v-if="productType.errorInfo" class="mx-1" type="danger">
           {{ productType.errorInfo }}
         </el-text>
       </div>
     </div>
-    <el-table
-      :data="productType.listResult"
-      row-key="id"
-      stripe
-      border
-      style="width: 100%"
-    >
+    <el-table :data="productType.listResult" row-key="id" stripe border style="width: 100%">
       <el-table-column prop="id" label="ID" width="100" align="center">
         <template #default="scope">
           <el-text class="mx-1" type="info" size="small">
@@ -217,11 +201,7 @@ async function handleFlag(rowId: number, flag: number) {
       </el-table-column>
       <el-table-column fixed="right" label="操作" width="200" align="center">
         <template #default="scope">
-          <el-button
-            type="primary"
-            :icon="Edit"
-            @click="handleEdit(scope.row.id)"
-          >
+          <el-button type="primary" :icon="Edit" @click="handleEdit(scope.row.id)">
             编辑
           </el-button>
           <el-button

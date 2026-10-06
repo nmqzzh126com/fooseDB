@@ -49,6 +49,7 @@
     "url": "https://github.com/xiaoxian521"
   },
   "dependencies": {
+    "@fooseDB/sdk": "file:../api-fastify/sdk",
     "@amap/amap-jsapi-loader": "^1.0.1",
     "@element-plus/icons-vue": "^2.3.2",
     "@howdyjs/mouse-menu": "^2.1.7",

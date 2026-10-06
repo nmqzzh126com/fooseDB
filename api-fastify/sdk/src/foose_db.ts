@@ -670,9 +670,16 @@ function isAxiosError(err: unknown): err is AxiosError {
 /** 从 unknown 错误中提取 display message + status */
 function extractError(err: unknown): { msg: string; status: number } {
   if (isAxiosError(err)) {
-    const body = (err.response?.data as { error?: string } | undefined) ?? {};
+    // Fastify 默认错误格式：{ statusCode, error: "Forbidden", message: "中文业务错误" }
+    // 先读 message（业务层中文），fallback 到 error（HTTP 英文原因短语）
+    const raw = err.response?.data;
+    // blob / arraybuffer 错误体交给拦截器提前解析；这里兜底检查
+    const body =
+      raw && typeof raw === "object" && !(raw instanceof Blob) && !(raw instanceof ArrayBuffer)
+        ? (raw as { message?: string; error?: string })
+        : {};
     return {
-      msg: body.error ?? err.message ?? "请求失败",
+      msg: body.message ?? body.error ?? err.message ?? "请求失败",
       status: err.response?.status ?? 0
     };
   }
@@ -684,7 +691,7 @@ function extractError(err: unknown): { msg: string; status: number } {
  * SDK 运行时版本 —— 每次新增/删除方法时手动递增
  * index.vue 会检查这个值，如果浏览器里跑的是旧 chunk 就触发硬刷新
  */
-export const FOSE_SDK_VERSION = 4;
+export const FOSE_SDK_VERSION = 7;
 
 // 确保版本号不会被 tree-shake 掉
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -892,8 +899,26 @@ export async function createFooseClient(
       }
       return body;
     },
-    (err: unknown) => {
+    async (err: unknown) => {
       loading.value = false;
+
+      // —— 特殊：responseType=blob 的错误响应（如 fooseDownload 403）
+      // axios 会把 JSON 错误体当 Blob 包，extractError 读不到 message，
+      // 这里手动等 Blob.text() 再 JSON.parse
+      if (
+        isAxiosError(err) &&
+        err.config?.responseType === "blob" &&
+        err.response?.data instanceof Blob
+      ) {
+        try {
+          const text = await err.response.data.text();
+          const parsed = JSON.parse(text) as { message?: string; error?: string };
+          (err as any).response.data = parsed;
+        } catch {
+          /* 解析失败就保留原样，extractError 会 fallback */
+        }
+      }
+
       const { msg: rawErr, status } = extractError(err);
 
       // —— 回填 lastRequestInfo 的响应侧字段（错误路径） ——
@@ -1533,9 +1558,9 @@ export async function createFooseClient(
         const name = filenames?.[i] ?? `file_${i}`;
         fd.append("file", f as File, name);
       });
-      const resp = await http.post(`api/files/${object}/${foldername}`, fd, {
-        headers: { "Content-Type": "multipart/form-data" }
-      });
+      // 注意：axios 传 FormData 时自动设置带 boundary 的 Content-Type，
+      // 绝不能手动覆盖 — 否则后端 request.files() 会解析失败
+      const resp = await http.post(`api/files/${object}/${foldername}`, fd);
       return resp as unknown as { ok: boolean; count: number; files: Array<{ id: number; original_name: string; stored_name: string; file_path: string; file_size: number; mime_type: string; file_ext: string }> };
     },
 
@@ -1858,6 +1883,19 @@ export interface FooseTableConfig {
    *   覆盖传值: prefix = "pt" → ptList, ptLoading, ...
    */
   prefix?: string;
+  /**
+   * 自动创建时间戳字段名（可选）
+   *  create / creates 时，若 payload 未显式传该字段，自动注入 Date.now()（毫秒级）。
+   *  例: "create_time" → 新建行自动带 create_time: 1728000000000
+   */
+  autoCreateTimeStampField?: string;
+  /**
+   * 自动更新时间戳字段名（可选）
+   *  update / updates 时，若 payload 未显式传该字段，自动注入 Date.now()（毫秒级）。
+   *  create / creates 时也会一并注入（如果 payload 未显式传）。
+   *  例: "update_time" → 更新行自动带 update_time: 1728000000000
+   */
+  autoUpdateTimeStampField?: string;
 }
 
 /**
@@ -2039,6 +2077,21 @@ export function createUseFoose<T extends FooseRow, Prefix extends string = "">(
   const TABLE = config.table;
   const DEFAULT_PAGE_SIZE = config.defaultPageSize ?? 10;
   const prefix: string = config.prefix ?? "";
+  const CREATE_TS = config.autoCreateTimeStampField;
+  const UPDATE_TS = config.autoUpdateTimeStampField;
+
+  /** 注入时间戳（仅在 payload 未显式传该字段时注入） */
+  const stampCreate = (p: Record<string, unknown>) => {
+    const now = Date.now();
+    if (CREATE_TS && !(CREATE_TS in p)) p[CREATE_TS] = now;
+    if (UPDATE_TS && !(UPDATE_TS in p)) p[UPDATE_TS] = now;
+    return p;
+  };
+  /** 注入更新时间戳（update 操作，无条件覆盖 —— 语义上"最后修改时间"必须是这次请求的时间） */
+  const stampUpdate = (p: Record<string, unknown>) => {
+    if (UPDATE_TS) p[UPDATE_TS] = Date.now();
+    return p;
+  };
 
   return function useFooseTable(): CleanComposable<T, Prefix> {
     // —— 响应式状态（必须在 setup 顶层同步创建）——
@@ -2115,7 +2168,11 @@ export function createUseFoose<T extends FooseRow, Prefix extends string = "">(
       error.value = null;
       try {
         const foose = await getClient();
-        const row = await foose.fooseCreate<T>(OBJECT, TABLE, payload);
+        const row = await foose.fooseCreate<T>(
+          OBJECT,
+          TABLE,
+          stampCreate({ ...(payload as Record<string, unknown>) }) as FoosePatch<T>
+        );
         current.value = row;
         data.value.unshift(row);
         total.value += 1;
@@ -2133,7 +2190,12 @@ export function createUseFoose<T extends FooseRow, Prefix extends string = "">(
       error.value = null;
       try {
         const foose = await getClient();
-        const row = await foose.fooseUpdate<T>(OBJECT, TABLE, id, payload);
+        const row = await foose.fooseUpdate<T>(
+          OBJECT,
+          TABLE,
+          id,
+          stampUpdate({ ...(payload as Record<string, unknown>) }) as FoosePatch<T>
+        );
         current.value = row;
         const idx = data.value.findIndex(r => {
           const rk =
@@ -2156,10 +2218,13 @@ export function createUseFoose<T extends FooseRow, Prefix extends string = "">(
       error.value = null;
       try {
         const foose = await getClient();
+        const stamped = payloads.map(
+          p => stampCreate({ ...(p as Record<string, unknown>) }) as FoosePatch<T>
+        );
         const res = await foose.fooseCreates<T>(
           OBJECT,
           TABLE,
-          payloads,
+          stamped,
           showSql
         );
         for (const row of res.rows) {
@@ -2183,7 +2248,11 @@ export function createUseFoose<T extends FooseRow, Prefix extends string = "">(
       error.value = null;
       try {
         const foose = await getClient();
-        const res = await foose.fooseUpdates<T>(OBJECT, TABLE, rows, showSql);
+        const stamped = rows.map(r => ({
+          ...(stampUpdate({ ...(r as Record<string, unknown>) }) as FoosePatch<T>),
+          id: r.id
+        }));
+        const res = await foose.fooseUpdates<T>(OBJECT, TABLE, stamped, showSql);
         for (const newRow of res.rows) {
           const r = newRow as Record<string, unknown>;
           const id = r.id ?? r.my_id;
@@ -2379,6 +2448,19 @@ export function createFooseApi<T extends FooseRow>(
 ): FooseApi<T> {
   const OBJECT = config.object;
   const TABLE = config.table;
+  const CREATE_TS = config.autoCreateTimeStampField;
+  const UPDATE_TS = config.autoUpdateTimeStampField;
+
+  const stampCreate = (p: Record<string, unknown>) => {
+    const now = Date.now();
+    if (CREATE_TS && !(CREATE_TS in p)) p[CREATE_TS] = now;
+    if (UPDATE_TS && !(UPDATE_TS in p)) p[UPDATE_TS] = now;
+    return p;
+  };
+  const stampUpdate = (p: Record<string, unknown>) => {
+    if (UPDATE_TS && !(UPDATE_TS in p)) p[UPDATE_TS] = Date.now();
+    return p;
+  };
 
   async function list(params?: FooseListParams) {
     const foose = await getFoose();
@@ -2394,22 +2476,38 @@ export function createFooseApi<T extends FooseRow>(
   }
   async function create(payload: FoosePatch<T>) {
     const foose = await getFoose();
-    return foose.fooseCreate<T>(OBJECT, TABLE, payload);
+    return foose.fooseCreate<T>(
+      OBJECT,
+      TABLE,
+      stampCreate({ ...(payload as Record<string, unknown>) }) as FoosePatch<T>
+    );
   }
   async function creates(rows: FoosePatch<T>[], showSql = false) {
     const foose = await getFoose();
-    return foose.fooseCreates<T>(OBJECT, TABLE, rows, showSql);
+    const stamped = rows.map(
+      p => stampCreate({ ...(p as Record<string, unknown>) }) as FoosePatch<T>
+    );
+    return foose.fooseCreates<T>(OBJECT, TABLE, stamped, showSql);
   }
   async function update(id: number | string, payload: FoosePatch<T>) {
     const foose = await getFoose();
-    return foose.fooseUpdate<T>(OBJECT, TABLE, id, payload);
+    return foose.fooseUpdate<T>(
+      OBJECT,
+      TABLE,
+      id,
+      stampUpdate({ ...(payload as Record<string, unknown>) }) as FoosePatch<T>
+    );
   }
   async function updates(
     rows: Array<{ id: number | string } & FoosePatch<T>>,
     showSql = false
   ) {
     const foose = await getFoose();
-    return foose.fooseUpdates<T>(OBJECT, TABLE, rows, showSql);
+    const stamped = rows.map(r => ({
+      ...(stampUpdate({ ...(r as Record<string, unknown>) }) as FoosePatch<T>),
+      id: r.id
+    }));
+    return foose.fooseUpdates<T>(OBJECT, TABLE, stamped, showSql);
   }
   async function remove(id: number | string) {
     const foose = await getFoose();

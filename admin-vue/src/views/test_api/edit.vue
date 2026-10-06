@@ -1,4 +1,4 @@
-<script setup lang="ts" name="EditProduct">
+﻿<script setup lang="ts" name="EditProduct">
 import { ref, reactive, onMounted, inject, toRaw } from "vue";
 import { useProduct, type ProductRow } from "@/api/demo/product_api";
 import {
@@ -9,10 +9,10 @@ import {
   useProductLabel,
   type ProductLabelRow
 } from "@/api/demo/product_label_api";
-//import type { FooseListParams, FoosePage } from "@/api/foose_db";
+//import type { FooseListParams, FoosePage } from "@fooseDB/sdk";
 import type { FooseListParams, FoosePage } from "@fooseDB/sdk";
 import { ElMessage } from "element-plus";
-import { FooseTools } from "@/api/foose_db_tools";
+import { FooseTools } from "@fooseDB/sdk";
 
 // ✅ 同组件多表场景 — 存整个对象，干净 key 不冲突
 const product = useProduct();

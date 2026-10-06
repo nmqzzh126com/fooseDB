@@ -1,8 +1,8 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, reactive, inject, onMounted, toRaw } from "vue";
 import { ElMessage } from "element-plus";
 import { ProductLabelRow, useProductLabel } from "@/api/demo/product_label_api";
-import { FooseTools } from "@/api/foose_db_tools";
+import { FooseTools } from "@fooseDB/sdk";
 
 const productLabel = reactive(useProductLabel());
 

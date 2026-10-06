@@ -1,11 +1,11 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { defineAsyncComponent, onMounted, provide, ref } from "vue";
 import { Edit, Search, Refresh, CirclePlus, Delete } from "@element-plus/icons-vue";
 import { debounce } from "@pureadmin/utils";
 import { useProduct } from "@/api/demo/product_api";
 import { CONFIG as productTypeConfig } from "@/api/demo/product_type_api";
 import { CONFIG as productLabelConfig } from "@/api/demo/product_label_api";
-//import type { FooseListParams } from "@/api/foose_db";
+//import type { FooseListParams } from "@fooseDB/sdk";
 import type { FooseListParams } from "@fooseDB/sdk";
 import { ElMessage } from "element-plus";
 

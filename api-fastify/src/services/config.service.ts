@@ -62,6 +62,7 @@ export interface ObjectRow {
   allow_upload_file: number;
   allow_download_file: number;
   allow_delete_file: number;
+  allow_list_file: number;
   created_at: number;
 }
 
@@ -186,6 +187,7 @@ export async function createObject(input: {
   allow_upload_file?: number;
   allow_download_file?: number;
   allow_delete_file?: number;
+  allow_list_file?: number;
 }): Promise<ObjectRow> {
   assertIdentifier(input.name, "项目名称");
   if (RESERVED_OBJECT_NAMES.has(input.name.toLowerCase())) {
@@ -203,11 +205,12 @@ export async function createObject(input: {
   const allowUpload = input.allow_upload_file ? 1 : 0;
   const allowDownload = input.allow_download_file ? 1 : 0;
   const allowDelete = input.allow_delete_file ? 1 : 0;
+  const allowList = input.allow_list_file === undefined ? 1 : input.allow_list_file ? 1 : 0;
   try {
     const info = getDb()
       .prepare(
-        `INSERT INTO object(name, description, db_type, db_url, db_path, cors_origins, cors_methods, custom_sql_enabled, auth_required, enabled, debug, allow_upload_file, allow_download_file, allow_delete_file)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO object(name, description, db_type, db_url, db_path, cors_origins, cors_methods, custom_sql_enabled, auth_required, enabled, debug, allow_upload_file, allow_download_file, allow_delete_file, allow_list_file)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         input.name,
@@ -223,7 +226,8 @@ export async function createObject(input: {
         debug,
         allowUpload,
         allowDownload,
-        allowDelete
+        allowDelete,
+        allowList
       );
     const row = getObject(Number(info.lastInsertRowid));
     // 动态注册数据源
@@ -253,6 +257,7 @@ export async function updateObject(
     allow_upload_file?: number;
     allow_download_file?: number;
     allow_delete_file?: number;
+    allow_list_file?: number;
   }
 ): Promise<ObjectRow> {
   const cur = getObject(id);
@@ -286,7 +291,8 @@ export async function updateObject(
         debug = COALESCE(?, debug),
         allow_upload_file = COALESCE(?, allow_upload_file),
         allow_download_file = COALESCE(?, allow_download_file),
-        allow_delete_file = COALESCE(?, allow_delete_file)
+        allow_delete_file = COALESCE(?, allow_delete_file),
+        allow_list_file = COALESCE(?, allow_list_file)
       WHERE id = ?`
     )
     .run(
@@ -303,6 +309,7 @@ export async function updateObject(
       input.allow_upload_file === undefined ? null : input.allow_upload_file ? 1 : 0,
       input.allow_download_file === undefined ? null : input.allow_download_file ? 1 : 0,
       input.allow_delete_file === undefined ? null : input.allow_delete_file ? 1 : 0,
+      input.allow_list_file === undefined ? null : input.allow_list_file ? 1 : 0,
       id
     );
   const updated = getObject(id);

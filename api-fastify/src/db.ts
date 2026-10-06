@@ -168,6 +168,7 @@ export async function initDb(db?: Database.Database): Promise<void> {
       allow_upload_file   INTEGER NOT NULL DEFAULT 0,         -- 是否允许文件上传（0=关闭 1=开启）
       allow_download_file INTEGER NOT NULL DEFAULT 0,         -- 是否允许文件下载（0=关闭 1=开启）
       allow_delete_file   INTEGER NOT NULL DEFAULT 0,         -- 是否允许文件删除（0=关闭 1=开启）
+      allow_list_file     INTEGER NOT NULL DEFAULT 1,         -- 是否允许查询文件列表（0=关闭 1=开启）
       created_at          INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
     );
 
@@ -386,7 +387,8 @@ export async function initDb(db?: Database.Database): Promise<void> {
     ["debug", "INTEGER NOT NULL DEFAULT 0"],
     ["allow_upload_file", "INTEGER NOT NULL DEFAULT 0"],
     ["allow_download_file", "INTEGER NOT NULL DEFAULT 0"],
-    ["allow_delete_file", "INTEGER NOT NULL DEFAULT 0"]
+    ["allow_delete_file", "INTEGER NOT NULL DEFAULT 0"],
+    ["allow_list_file", "INTEGER NOT NULL DEFAULT 1"]
   ] as const;
   let needMigration = false;
   for (const [col, typeDef] of newCols) {

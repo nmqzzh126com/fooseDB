@@ -7,7 +7,7 @@ import {
   type FooseClient,
   type FooseListParams,
   type FooseLastRequest
-} from "@/api/foose_db";
+} from "@fooseDB/sdk";
 
 defineOptions({ name: "TestApiApiDemo" });
 

@@ -21,7 +21,8 @@
     "lib": ["ESNext", "DOM"],
     "paths": {
       "@/*": ["./src/*"],
-      "@build/*": ["./build/*"]
+      "@build/*": ["./build/*"],
+      "@fooseDB/sdk": ["../api-fastify/sdk/src/foose_db.ts"]
     },
     "types": [
       "node",

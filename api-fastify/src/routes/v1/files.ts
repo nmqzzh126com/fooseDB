@@ -11,7 +11,7 @@
  * 权限链：
  *   1. 项目存在（object.name，404）
  *   2. 项目启用（enabled=0 → 403）
- *   3. 项目级文件权限 allow_upload_file / allow_download_file / allow_delete_file（403）
+ *   3. 项目级文件权限 allow_upload_file / allow_download_file / allow_delete_file / allow_list_file（403）
  *   4. auth_required=1 → Bearer token + 指纹校验（401）
  *   5. 用户→项目绑定校验（assertCallerObjectBinding）
  *
@@ -63,9 +63,9 @@ function parseDeleteFilesCount(): number {
   return Number.isFinite(n) && n > 0 ? n : 5;
 }
 
-/** uploads 目录根路径：api-fastify/uploads/ */
+/** uploads 目录根路径：api-fastify/uploads/（与 db.ts 的 data/ 对齐，硬编码项目根） */
 function getUploadsRoot(): string {
-  const dir = path.resolve(__dirname, "..", "..", "uploads");
+  const dir = path.resolve(__dirname, "..", "..", "..", "uploads");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -112,7 +112,7 @@ interface FileAccessResult {
  */
 async function resolveFileAccess(
   objectName: string,
-  fileOp: "upload" | "download" | "delete",
+  fileOp: "upload" | "download" | "delete" | "list",
   auth: { token?: string; fingerprint: string }
 ): Promise<FileAccessResult> {
   const obj = getObjectByName(objectName);
@@ -123,11 +123,14 @@ async function resolveFileAccess(
   const flagMap = {
     upload: obj.allow_upload_file,
     download: obj.allow_download_file,
-    delete: obj.allow_delete_file
+    delete: obj.allow_delete_file,
+    list: obj.allow_list_file
   } as const;
   if (flagMap[fileOp] === 0) {
     const label =
-      fileOp === "upload" ? "上传" : fileOp === "download" ? "下载" : "删除";
+      fileOp === "upload" ? "上传" :
+        fileOp === "download" ? "下载" :
+          fileOp === "delete" ? "删除" : "列表";
     throw new BusinessError(403, `项目 "${objectName}" 未开启文件${label}权限`);
   }
 
@@ -268,7 +271,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   }>("/api/files/:object/info/:file_id", async (request, reply) => {
     const { object: objectName, file_id: fileIdParam } = request.params;
 
-    const { obj } = await resolveFileAccess(objectName, "download", {
+    const { obj } = await resolveFileAccess(objectName, "list", {
       token: request.authContext.bearerToken,
       fingerprint: request.authContext.fingerprint
     });
@@ -515,7 +518,7 @@ const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
     const { object: objectName, foldername, page: pageParam } = request.params;
     validateFoldername(foldername);
 
-    const { obj } = await resolveFileAccess(objectName, "download", {
+    const { obj } = await resolveFileAccess(objectName, "list", {
       token: request.authContext.bearerToken,
       fingerprint: request.authContext.fingerprint
     });
