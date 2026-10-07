@@ -101,6 +101,10 @@ export default async ({ mode }: ConfigEnv): Promise<UserConfigExport> => {
           entryFileNames: "static/js/[name]-[hash].js",
           assetFileNames: "static/[ext]/[name]-[hash].[ext]"
         },
+        // SDK 源码位于 admin-vue 目录外部，rolldown 需要额外的 node_modules 搜索路径
+        resolve: {
+          modules: [pathResolve("node_modules", import.meta.url), "node_modules"]
+        },
         checks: {
           pluginTimings: false,
           toleratedTransform: false
