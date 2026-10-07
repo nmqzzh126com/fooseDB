@@ -6,9 +6,16 @@ dist/
 *.tsbuildinfo
 
 # Environment variables (contains secrets)
+# —— 只忽略真正含密钥的运行时文件 ——
+# admin-vue/.env* 是 Vite 构建模板（端口、proxy、SDK baseURL），不含密钥，应当提交 ——
 .env
-.env.*
 !.env.example
+!admin-vue/.env
+.env.local
+.env.*.local
+api-fastify/.env
+api-fastify/.env.*
+!api-fastify/.env.example
 
 # Database files
 *.db
