@@ -9,15 +9,15 @@ description: "环境要求、安装步骤、开发模式、生产部署"
 
 ## 前置条件
 
-| 依赖 | 最低版本 | 说明 |
-|------|---------|------|
-| Node.js | ≥ 22.22.1 | admin-vue 的 engines 强制 |
-| pnpm | ≥ 11 | 项目使用 `only-allow pnpm` 锁定 |
-| （可选）Redis | ≥ 5 | 未安装时缓存自动降级为 Stub |
-| （可选）MySQL | ≥ 5.7 | MySQL 业务数据源 |
-| （可选）PostgreSQL | ≥ 12 | PostgreSQL 业务数据源 |
+| 依赖                       | 最低版本  | 说明                            |
+| -------------------------- | --------- | ------------------------------- |
+| Node.js                    | ≥ 22.22.1 | admin-vue 的 engines 强制       |
+| pnpm                       | ≥ 11      | 项目使用 `only-allow pnpm` 锁定 |
+| （强烈推荐）Redis          | ≥ 5       | 未安装时缓存自动降级为 Stub     |
+| （根据需求可选）MySQL      | ≥ 5.7     | MySQL 业务数据源                |
+| （根据需求可选）PostgreSQL | ≥ 12      | PostgreSQL 业务数据源           |
 
-> **包管理器锁定**：`admin-vue/package.json` 中有 `"preinstall": "npx only-allow pnpm"`，尝试用 npm/yarn 会直接报错。后端 `api-fastify` 没有强制，但也统一用 pnpm。
+> **包管理器锁定**：统一用 pnpm。
 
 ---
 
@@ -27,7 +27,7 @@ description: "环境要求、安装步骤、开发模式、生产部署"
 pure-admin-fastify/
 ├── api-fastify/       后端（Fastify）+ SDK
 ├── admin-vue/         管理后台（Vue 3）
-├── tools/redis/       Windows 便携 Redis（可选）
+├── tools/redis/       Windows 便携 Redis（开发时使用）
 └── docs/              本文档
 ```
 
@@ -37,11 +37,11 @@ pure-admin-fastify/
 
 ## 开发模式（推荐）
 
-### Step 1 — 克隆并安装
+### 第一步 — 克隆并安装
 
 ```bash
-git clone <your-repo-url>
-cd pure-admin-fastify
+git clone https://github.com/nmqzzh126com/fooseDB.git
+cd fooseDB
 
 # 后端 + SDK
 cd api-fastify
@@ -52,7 +52,7 @@ cd ../admin-vue
 pnpm install
 ```
 
-### Step 2 — 启动后端
+### 第二步 — 启动后端
 
 ```bash
 cd api-fastify
@@ -68,24 +68,26 @@ pnpm dev
 4. Redis 未启动时自动降级为 Stub
 5. 管理后台入口注册到 `/admin`（ADMIN_PATH 可配置）
 
-### Step 3 — 启动管理后台
+### 第三步 — 启动管理后台
+
+修改 `admin-vue/.env.production`，将 `VITE_FOOSE_DB_BASE_URL` 改为 `当前服务器的接口地址或域名`,否则登录后台无法正常演示。
 
 ```bash
 cd admin-vue
 pnpm dev
-# → http://localhost:8848/admin（端口被占用时自动递增）
+# → http://localhost:8859/admin（端口被占用时自动递增）
 ```
 
 Vite 自动读 `api-fastify/.env` 的 `ADMIN_PATH`，并 proxy `/api` 和 `/uploads` 到 `http://localhost:8858`。
 
 默认登录账号（在 `.env` 配置）：
 
-| 字段 | 默认值 |
-|------|--------|
-| 用户名 | `admin` |
-| 密码 | `admin123456`（可明文或 bcrypt `$2` 开头） |
+| 字段   | 默认值                                     |
+| ------ | ------------------------------------------ |
+| 用户名 | `admin`                                    |
+| 密码   | `admin123456`（可明文或 bcrypt `$2` 开头） |
 
-### Step 4 — （可选）启动 Redis
+### 第四步 — （可选）启动 Redis
 
 Windows 便携版：
 
@@ -99,13 +101,13 @@ redis-server redis.windows.conf
 
 ## 端口总览
 
-| 服务 | 默认端口 | 说明 |
-|------|---------|------|
-| api-fastify | **8858** | 后端 HTTP（.env 里可改） |
-| admin-vue | **8848**（被占用时自动递增） | Vite proxy → 8858 |
-| Redis | **6379**（可选） | 缓存服务 |
-| MySQL | **3306**（可选） | 业务数据源 |
-| PostgreSQL | **5432**（可选） | 业务数据源 |
+| 服务        | 默认端口                     | 说明                     |
+| ----------- | ---------------------------- | ------------------------ |
+| api-fastify | **8858**                     | 后端 HTTP（.env 里可改） |
+| admin-vue   | **8859**（被占用时自动递增） | Vite proxy → 8859        |
+| Redis       | **6379**（可选）             | 缓存服务                 |
+| MySQL       | **3306**（可选）             | 业务数据源               |
+| PostgreSQL  | **5432**（可选）             | 业务数据源               |
 
 ---
 
@@ -168,11 +170,11 @@ pnpm build
 
 **生产必须改的 3 个值**：
 
-| 变量 | 默认 | 风险 |
-|------|------|------|
-| `JWT_SECRET` | `dev-secret-change-in-production` | 任何拿到这个值的人能伪造 JWT |
-| `ADMIN_PASSWORD` | `admin123456` | 管理员弱密码 |
-| `REDIS_CACHE_DEFAULT__ENABLED` | `false` | 生产建议开启（防限流失效） |
+| 变量                           | 默认                              | 风险                         |
+| ------------------------------ | --------------------------------- | ---------------------------- |
+| `JWT_SECRET`                   | `dev-secret-change-in-production` | 任何拿到这个值的人能伪造 JWT |
+| `ADMIN_PASSWORD`               | `admin123456`                     | 管理员弱密码                 |
+| `REDIS_CACHE_DEFAULT__ENABLED` | `false`                           | 生产建议开启（防限流失效）   |
 
 ---
 
@@ -211,8 +213,8 @@ pnpm rebuild better-sqlite3
 ```typescript
 server: {
   proxy: {
-    "/api": { target: "http://api.example.com:8858", changeOrigin: true },
-    "/uploads": { target: "http://api.example.com:8858", changeOrigin: true }
+    "/api": { target: "http://api.example.com:8859", changeOrigin: true },
+    "/uploads": { target: "http://api.example.com:8859", changeOrigin: true }
   }
 }
 ```

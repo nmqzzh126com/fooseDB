@@ -9,7 +9,7 @@ import { type FastifyPluginAsync } from "fastify";
 import { getAllStatuses } from "../../datasources/registry.js";
 import { getAllCacheStatuses } from "../../caches/registry.js";
 
-const ROOT_MAGIC_B = "a3a34433333334111aa33333333";
+const ROOT_MAGIC_B = "接口已启动...";
 
 const plugin: FastifyPluginAsync = async (fastify): Promise<void> => {
   const handle = async () => {
