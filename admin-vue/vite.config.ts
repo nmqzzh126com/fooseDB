@@ -91,17 +91,8 @@ export default async ({ mode }: ConfigEnv): Promise<UserConfigExport> => {
       sourcemap: false,
       // 消除打包大小超过500kb警告
       chunkSizeWarningLimit: 4000,
+      // SDK 源码位于 admin-vue 目录外部，rolldown 需要额外的 node_modules 搜索路径
       rolldownOptions: {
-        input: {
-          index: pathResolve("./index.html", import.meta.url)
-        },
-        // 静态资源分类打包
-        output: {
-          chunkFileNames: "static/js/[name]-[hash].js",
-          entryFileNames: "static/js/[name]-[hash].js",
-          assetFileNames: "static/[ext]/[name]-[hash].[ext]"
-        },
-        // SDK 源码位于 admin-vue 目录外部，rolldown 需要额外的 node_modules 搜索路径
         resolve: {
           modules: [pathResolve("node_modules", import.meta.url), "node_modules"]
         },
