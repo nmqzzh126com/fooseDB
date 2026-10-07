@@ -54,8 +54,9 @@ let initPromise: Promise<FooseClient> | null = null;
 
 /** 登录账号来源：环境变量 → 默认值（开发用） */
 export const DEFAULT_OBJECT_NAME = "sqlite_demo";
+// ?? 只在 undefined/null 时走 fallback，空字符串允许通过（表示同源走 Nginx 反代）
 const FOOSE_DB_BASE_URL =
-  import.meta.env.VITE_FOOSE_DB_BASE_URL || "http://127.0.0.1:8858";
+  import.meta.env.VITE_FOOSE_DB_BASE_URL ?? "http://127.0.0.1:8858";
 const DEFAULT_USERNAME = "demo";
 const DEFAULT_PASSWORD = "admin123456!@#";
 

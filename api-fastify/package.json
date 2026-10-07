@@ -1,6 +1,6 @@
 {
   "name": "foosdb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "FoosDB — Fastify-based, object-driven generic CRUD API server with per-row datasource configuration",
   "main": "dist/main.js",
   "type": "module",

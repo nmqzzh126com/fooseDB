@@ -1,9 +1,9 @@
 # fooseDB api
 
 > 一个**零代码**的通用 CRUD 接口引擎 + 可视化配置管理后台 + 前端 SDK 测试示例。后端本身不硬编码任何业务表，所有数据源、连接串、表级权限都通过管理后台动态配置，运行时从 SQLite 配置库读取。目前已适配 SQLite、MySQL、PostgreSQL 数据源,其他数据库驱动正在开发中
-> [查看在线使用文档](http://fastify_api_doc.nmyjs.cn/)
-
-即将发布在线演示，敬请期待。
+> [在线文档](http://fastify_api_doc.nmyjs.cn/)
+> ...
+> [在线演示](http://foose_db_admin.nmyjs.cn/admin)
 
 ## ✨ 特性
 
