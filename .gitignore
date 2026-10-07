@@ -16,6 +16,9 @@ dist/
 *.db-shm
 *.db-journal
 
+# API uploads (file storage)
+api-fastify/uploads/
+
 # pnpm store (project-local)
 .pnpm-store/
 
