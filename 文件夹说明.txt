@@ -1,0 +1,5 @@
+api-fastify --- fooseDB 核心项目
+admin-vue   --- fooseDB 后台管理项目
+docs-web    --- 说明文档
+tools       --- windows开发使用的redis
+client-demo --- 基于PureAdmin制作的前端示例,可通过接口实现登录及操作数据表
